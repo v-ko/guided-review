@@ -1,0 +1,172 @@
+{
+  "name": "guided-code-review",
+  "displayName": "Guided Code Review",
+  "description": "Local Markdown walkthroughs with inline diffs and Git-staged review progress.",
+  "version": "0.6.0",
+  "publisher": "misli-local",
+  "license": "GPL-3.0-only",
+  "engines": {
+    "vscode": "^1.134.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/src/extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false
+    },
+    "virtualWorkspaces": false
+  },
+  "contributes": {
+    "configuration": {
+      "title": "Guided Code Review",
+      "properties": {
+        "guidedCodeReview.syntaxHighlighting": {
+          "type": "boolean",
+          "default": true,
+          "description": "Color inline diff source using installed TextMate grammars and the active theme. Unsupported or expensive files remain plain text."
+        }
+      }
+    },
+    "chatSkills": [
+      {
+        "path": "./skills/guided-review/SKILL.md"
+      }
+    ],
+    "languageModelTools": [
+      {
+        "name": "guidedCodeReview_captureReview",
+        "displayName": "Capture Guided Code Review diffs",
+        "modelDescription": "Capture the explicit Git repository/file scope in a saved Guided Code Review .review.md document. Writes or replaces its private .review.snapshot.json sidecar; never edits source, stages, commits, or approves. Returns immutable base SHAs, generated hunk IDs/positions, and validation issues without source contents. Use after authoring a review or changing its scoped code/configuration. Existing explicit hunk references may need repair using the returned IDs. Save review and source edits first; read the guided-review skill for the format and workflow.",
+        "userDescription": "Capture saved local changes into a private review snapshot.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "guidedCodeReviewCapture",
+        "icon": "$(diff)",
+        "when": "isWorkspaceTrusted",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "documentPath": {
+              "type": "string",
+              "description": "Absolute path to an existing, saved .review.md file inside the open workspace."
+            }
+          },
+          "required": [
+            "documentPath"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "guidedCodeReview_validateReview",
+        "displayName": "Validate Guided Code Review",
+        "modelDescription": "Read-only validation of a saved Guided Code Review document and frozen snapshot. Checks configuration, snapshot integrity, hunk references, coverage, and saved/unsaved source drift. Returns valid, issues, uncovered hunk IDs, empty blocks and counts. Does not capture, modify documents/source or change Git. Use after writing or clarifying a review, after capture and hunk-reference repair, and before presenting it. Tests and prose accuracy are not certified by this check.",
+        "userDescription": "Check review references, coverage and source freshness without changing files.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "guidedCodeReviewValidate",
+        "icon": "$(check)",
+        "when": "isWorkspaceTrusted",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "documentPath": {
+              "type": "string",
+              "description": "Absolute path to an existing, saved .review.md file inside the open workspace."
+            }
+          },
+          "required": [
+            "documentPath"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "guidedCodeReview_openReview",
+        "displayName": "Open Guided Code Review presentation",
+        "modelDescription": "Validate and open an existing, saved Guided Code Review document in its VS Code webview tab. Returns validation issues instead of opening if snapshot/references/coverage/source freshness are invalid. Never captures, rewrites the story or changes Git. Use when the user requests a review presentation and authoring/validation are complete.",
+        "userDescription": "Open a validated local review presentation for reading and user approval.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "guidedCodeReviewOpen",
+        "icon": "$(preview)",
+        "when": "isWorkspaceTrusted",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "documentPath": {
+              "type": "string",
+              "description": "Absolute path to an existing, saved .review.md file inside the open workspace."
+            }
+          },
+          "required": [
+            "documentPath"
+          ],
+          "additionalProperties": false
+        }
+      }
+    ],
+    "commands": [
+      {
+        "command": "guidedCodeReview.openReview",
+        "title": "Guided Code Review: Open Review",
+        "icon": "$(preview)"
+      },
+      {
+        "command": "guidedCodeReview.refreshReview",
+        "title": "Guided Code Review: Refresh Review Diffs"
+      },
+      {
+        "command": "guidedCodeReview.cleanCompletedReviews",
+        "title": "Guided Code Review: Clean Up Completed Reviews",
+        "enablement": "isWorkspaceTrusted"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "guidedCodeReview.openReview",
+          "when": "resourceFilename =~ /\\.review\\.md$/",
+          "group": "navigation"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "guidedCodeReview.openReview",
+          "when": "resourceFilename =~ /\\.review\\.md$/",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.webview.json",
+    "vscode:prepublish": "npm run build",
+    "check": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.webview.json --noEmit",
+    "watch": "tsc -p tsconfig.json --watch",
+    "watch:webview": "tsc -p tsconfig.webview.json --watch",
+    "test": "npm run build && node --test test/*.test.cjs",
+    "capture": "npm run build && node scripts/capture.cjs",
+    "package": "node scripts/package.cjs",
+    "demo": "npm run build && node scripts/demo.cjs",
+    "verify:release": "node scripts/verify-release.cjs",
+    "smoke": "npm run package && node scripts/smoke.cjs"
+  },
+  "dependencies": {
+    "jsonc-parser": "3.3.1",
+    "markdown-it": "15.0.2",
+    "mermaid": "12.1.0",
+    "vscode-oniguruma": "2.0.1",
+    "vscode-textmate": "9.3.2"
+  },
+  "overrides": {
+    "dompurify": "3.4.17",
+    "katex": "0.19.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "@types/vscode": "1.134.0",
+    "@vscode/vsce": "4.0.0",
+    "prettier": "3.9.10",
+    "typescript": "7.0.2"
+  }
+}
