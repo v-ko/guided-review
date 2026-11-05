@@ -149,7 +149,9 @@
     "package": "node scripts/package.cjs",
     "demo": "npm run build && node scripts/demo.cjs",
     "verify:release": "node scripts/verify-release.cjs",
-    "smoke": "npm run package && node scripts/smoke.cjs"
+    "smoke": "npm run package && node scripts/smoke.cjs",
+    "suggest:build": "tsc -p experiments/layout-suggest/tsconfig.json && tsc -p experiments/layout-suggest/tsconfig.page.json",
+    "suggest:test": "npm run suggest:build && node --test experiments/layout-suggest/test/*.test.cjs"
   },
   "dependencies": {
     "jsonc-parser": "3.3.1",
