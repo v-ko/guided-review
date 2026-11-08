@@ -1,0 +1,39 @@
+# Root allowlist. vsce/npm selects only production dependencies in node_modules.
+@(!(package.json|README.md|LICENSE|out|media|skills|node_modules))
+@(!(out|media|skills|node_modules))/**
+
+# Only compiled host/browser modules, the stylesheets and bundled skill resources.
+out/!(src|media)
+out/!(src|media)/**
+out/src/!(*.js)
+out/src/*/**
+out/media/!(*.mjs)
+out/media/*/**
+media/!(suggest.css)
+media/*/**
+skills/!(guided-review)
+skills/!(guided-review)/**
+skills/guided-review/!(SKILL.md)
+skills/guided-review/*/**
+
+# The webview loads only mermaid's self-contained ESM bundle. Mermaid's own
+# dependencies are bundled into it: ship only their manifests and license texts.
+node_modules/!(mermaid|markdown-it|argparse|entities|linkify-it|mdurl|punycode.js|uc.micro|jsonc-parser|vscode-oniguruma|vscode-textmate)/!(package.json|LICENSE*|LICENCE*|license*|licence*|COPYING*|NOTICE*)
+node_modules/!(mermaid|markdown-it|argparse|entities|linkify-it|mdurl|punycode.js|uc.micro|jsonc-parser|vscode-oniguruma|vscode-textmate)/*/**
+!node_modules/@!(types)/*/@(package.json|LICENSE*|LICENCE*|license*|licence*|COPYING*|NOTICE*)
+node_modules/mermaid/!(package.json|LICENSE|dist)
+node_modules/mermaid/dist/!(mermaid.esm.min.mjs|chunks)
+node_modules/mermaid/dist/!(chunks)/**
+node_modules/mermaid/dist/chunks/!(mermaid.esm.min)/**
+
+# Apply exclusions to dependencies too, without removing runtime JavaScript/WASM.
+**/*.map
+**/*.ts
+**/*.mts
+**/*.cts
+**/*.review.md
+**/*.review.snapshot.json*
+**/.*
+**/.*/**
+**/node_modules/@types/**
+**/{test,tests,scripts,examples}/**

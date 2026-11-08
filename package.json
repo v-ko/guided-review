@@ -1,7 +1,7 @@
 {
   "name": "guided-code-review",
-  "displayName": "Guided Code Review",
-  "description": "Local Markdown walkthroughs with inline diffs and Git-staged review progress.",
+  "displayName": "Guided Review",
+  "description": "Agent suggestions on Markdown documents, with live inline diffs that stage exactly the lines you approve.",
   "version": "0.6.0",
   "publisher": "misli-local",
   "license": "GPL-3.0-only",
@@ -12,6 +12,10 @@
     "Other"
   ],
   "main": "./out/src/extension.js",
+  "activationEvents": [
+    "onStartupFinished",
+    "onWebviewPanel:layoutSuggest.session"
+  ],
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": false
@@ -20,7 +24,7 @@
   },
   "contributes": {
     "configuration": {
-      "title": "Guided Code Review",
+      "title": "Guided Review",
       "properties": {
         "guidedCodeReview.syntaxHighlighting": {
           "type": "boolean",
@@ -36,70 +40,226 @@
     ],
     "languageModelTools": [
       {
-        "name": "guidedCodeReview_captureReview",
-        "displayName": "Capture Guided Code Review diffs",
-        "modelDescription": "Capture the explicit Git repository/file scope in a saved Guided Code Review .review.md document. Writes or replaces its private .review.snapshot.json sidecar; never edits source, stages, commits, or approves. Returns immutable base SHAs, generated hunk IDs/positions, and validation issues without source contents. Use after authoring a review or changing its scoped code/configuration. Existing explicit hunk references may need repair using the returned IDs. Save review and source edits first; read the guided-review skill for the format and workflow.",
-        "userDescription": "Capture saved local changes into a private review snapshot.",
+        "name": "guidedReview_listSessions",
+        "displayName": "List suggestion sessions",
+        "modelDescription": "List the suggestion sessions of this workspace: each session name, its document path, and whether its view is open. The other guidedReview tools take the session name directly.",
+        "userDescription": "List the suggestion sessions.",
         "canBeReferencedInPrompt": true,
-        "toolReferenceName": "guidedCodeReviewCapture",
+        "toolReferenceName": "guidedReviewSessions",
+        "icon": "$(list-unordered)",
+        "when": "isWorkspaceTrusted",
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "guidedReview_openSession",
+        "displayName": "Open suggestion session",
+        "modelDescription": "Open a suggestion session for a Markdown document, or start one with a blank document without a path. Joins the existing session of the same document. Returns the session name that the other guidedReview tools take. Read the guided-review skill first. Follow the user's task, present at most 2-3 bullet points at a time, then wait for feedback.",
+        "userDescription": "Open a suggestion session for a Markdown document, or a blank document.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "guidedReviewOpen",
+        "icon": "$(lightbulb)",
+        "when": "isWorkspaceTrusted",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Absolute path to a saved Markdown file. Omit it to start a suggestion session with a blank document."
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "guidedReview_waitForFeedback",
+        "displayName": "Wait for suggestion session feedback",
+        "modelDescription": "Wait until the reader asks for new suggestions in the suggestion session, or the timeout ends. Returns the events (requests, accepted and declined suggestions, outdated code blocks), the current suggestions and the document path. After presenting at most 2-3 bullet points, wait for feedback; on timeout, wait again without advancing.",
+        "userDescription": "Wait for a request from the suggestion session.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "guidedReviewWait",
+        "icon": "$(watch)",
+        "when": "isWorkspaceTrusted",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "session": {
+              "type": "string",
+              "description": "Name of the suggestion session."
+            },
+            "timeoutSeconds": {
+              "type": "number",
+              "description": "1-600, default 60."
+            }
+          },
+          "required": [
+            "session"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "guidedReview_addSuggestions",
+        "displayName": "Add suggestions",
+        "modelDescription": "Add suggestions to a suggestion session; they appear on top in the given order. Follow the user's task and present at most 2-3 bullet points at a time, then wait for feedback. Each replaces the span from..to, inserts after a quote, or appends to the end without an anchor. All document changes go through suggestions; only the reader accepts them. Returns the new ids and the rejected items with their problems.",
+        "userDescription": "Show suggestions in the suggestion session.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "guidedReviewAdd",
+        "icon": "$(add)",
+        "when": "isWorkspaceTrusted",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "session": {
+              "type": "string",
+              "description": "Name of the suggestion session."
+            },
+            "suggestions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "replacement": {
+                    "type": "string",
+                    "description": "Markdown that replaces the span, or is inserted."
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "layout",
+                      "edit"
+                    ],
+                    "description": "layout (default) restructures without rewording; edit changes wording and needs from/to."
+                  },
+                  "from": {
+                    "type": "string",
+                    "description": "Unique plain-text quote where the replaced span starts."
+                  },
+                  "to": {
+                    "type": "string",
+                    "description": "Plain-text quote where the replaced span ends (inclusive)."
+                  },
+                  "after": {
+                    "type": "string",
+                    "description": "Unique plain-text quote to insert after."
+                  }
+                },
+                "required": [
+                  "replacement"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "session",
+            "suggestions"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "guidedReview_removeSuggestions",
+        "displayName": "Remove suggestions",
+        "modelDescription": "Remove suggestions from a suggestion session by id. An empty session shows OK to the reader.",
+        "userDescription": "Remove suggestions from the suggestion session.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "guidedReviewRemove",
+        "icon": "$(remove)",
+        "when": "isWorkspaceTrusted",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "session": {
+              "type": "string",
+              "description": "Name of the suggestion session."
+            },
+            "ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "session",
+            "ids"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "guidedReview_listSuggestions",
+        "displayName": "List suggestions",
+        "modelDescription": "List the suggestions of a suggestion session, with the problems of each.",
+        "userDescription": "List the suggestions in the suggestion session.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "guidedReviewList",
+        "icon": "$(list-flat)",
+        "when": "isWorkspaceTrusted",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "session": {
+              "type": "string",
+              "description": "Name of the suggestion session."
+            }
+          },
+          "required": [
+            "session"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "guidedReview_captureCodeChanges",
+        "displayName": "Capture code changes",
+        "modelDescription": "Capture changed lines of files (HEAD against the working tree) as spans for a review-diff code block in the suggestion session document. Without ranges, captures every change that no block in the document shows yet. Ranges use new line numbers ('41-42', '41') or old line numbers of removed lines ('old:40'). Returns block fields (repo, file, spans), shows, and inspection: actual core endpoints, neighboring lines outside the core, and an abbreviated preview of the rendered diff. Check inspection against the intended function boundaries before adding a block; recapture incorrect ranges. Ranges are literal, never expanded to functions. Never stages or edits files; only the reader approves a block to stage its lines.",
+        "userDescription": "Capture changed lines for a code block in the suggestion session.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "guidedReviewCapture",
         "icon": "$(diff)",
         "when": "isWorkspaceTrusted",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "documentPath": {
+            "session": {
               "type": "string",
-              "description": "Absolute path to an existing, saved .review.md file inside the open workspace."
+              "description": "Name of the suggestion session."
+            },
+            "files": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "description": "Absolute path of a file in a Git repository in the workspace."
+                  },
+                  "ranges": {
+                    "type": "array",
+                    "description": "Literal source line ranges. Read the source first and check returned inspection boundaries; partial functions are allowed but never inferred or expanded.",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "file"
+                ]
+              }
+            },
+            "block": {
+              "type": "string",
+              "description": "Id of a block that this capture replaces; its lines do not count as taken."
             }
           },
           "required": [
-            "documentPath"
-          ],
-          "additionalProperties": false
-        }
-      },
-      {
-        "name": "guidedCodeReview_validateReview",
-        "displayName": "Validate Guided Code Review",
-        "modelDescription": "Read-only validation of a saved Guided Code Review document and frozen snapshot. Checks configuration, snapshot integrity, hunk references, coverage, and saved/unsaved source drift. Returns valid, issues, uncovered hunk IDs, empty blocks and counts. Does not capture, modify documents/source or change Git. Use after writing or clarifying a review, after capture and hunk-reference repair, and before presenting it. Tests and prose accuracy are not certified by this check.",
-        "userDescription": "Check review references, coverage and source freshness without changing files.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "guidedCodeReviewValidate",
-        "icon": "$(check)",
-        "when": "isWorkspaceTrusted",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "documentPath": {
-              "type": "string",
-              "description": "Absolute path to an existing, saved .review.md file inside the open workspace."
-            }
-          },
-          "required": [
-            "documentPath"
-          ],
-          "additionalProperties": false
-        }
-      },
-      {
-        "name": "guidedCodeReview_openReview",
-        "displayName": "Open Guided Code Review presentation",
-        "modelDescription": "Validate and open an existing, saved Guided Code Review document in its VS Code webview tab. Returns validation issues instead of opening if snapshot/references/coverage/source freshness are invalid. Never captures, rewrites the story or changes Git. Use when the user requests a review presentation and authoring/validation are complete.",
-        "userDescription": "Open a validated local review presentation for reading and user approval.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "guidedCodeReviewOpen",
-        "icon": "$(preview)",
-        "when": "isWorkspaceTrusted",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "documentPath": {
-              "type": "string",
-              "description": "Absolute path to an existing, saved .review.md file inside the open workspace."
-            }
-          },
-          "required": [
-            "documentPath"
+            "session",
+            "files"
           ],
           "additionalProperties": false
         }
@@ -107,51 +267,45 @@
     ],
     "commands": [
       {
-        "command": "guidedCodeReview.openReview",
-        "title": "Guided Code Review: Open Review",
-        "icon": "$(preview)"
-      },
-      {
-        "command": "guidedCodeReview.refreshReview",
-        "title": "Guided Code Review: Refresh Review Diffs"
-      },
-      {
-        "command": "guidedCodeReview.cleanCompletedReviews",
-        "title": "Guided Code Review: Clean Up Completed Reviews",
+        "command": "layoutSuggest.openSession",
+        "title": "Open in Suggestion Mode",
+        "category": "Guided Review",
+        "icon": "$(lightbulb)",
         "enablement": "isWorkspaceTrusted"
+      },
+      {
+        "command": "layoutSuggest.deleteSession",
+        "title": "Delete Suggestion Sessions",
+        "category": "Guided Review"
       }
     ],
     "menus": {
       "editor/title": [
         {
-          "command": "guidedCodeReview.openReview",
-          "when": "resourceFilename =~ /\\.review\\.md$/",
+          "command": "layoutSuggest.openSession",
+          "when": "resourceLangId == markdown && resourceScheme == file",
           "group": "navigation"
         }
       ],
       "explorer/context": [
         {
-          "command": "guidedCodeReview.openReview",
-          "when": "resourceFilename =~ /\\.review\\.md$/",
+          "command": "layoutSuggest.openSession",
+          "when": "resourceLangId == markdown && resourceScheme == file",
           "group": "navigation"
         }
       ]
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && tsc -p tsconfig.webview.json",
+    "build": "node scripts/clean.cjs && tsc -p tsconfig.json && tsc -p tsconfig.webview.json",
     "vscode:prepublish": "npm run build",
     "check": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.webview.json --noEmit",
     "watch": "tsc -p tsconfig.json --watch",
     "watch:webview": "tsc -p tsconfig.webview.json --watch",
     "test": "npm run build && node --test test/*.test.cjs",
-    "capture": "npm run build && node scripts/capture.cjs",
     "package": "node scripts/package.cjs",
-    "demo": "npm run build && node scripts/demo.cjs",
-    "verify:release": "node scripts/verify-release.cjs",
     "smoke": "npm run package && node scripts/smoke.cjs",
-    "suggest:build": "tsc -p experiments/layout-suggest/tsconfig.json && tsc -p experiments/layout-suggest/tsconfig.page.json",
-    "suggest:test": "npm run suggest:build && node --test experiments/layout-suggest/test/*.test.cjs"
+    "verify:release": "node scripts/verify-release.cjs"
   },
   "dependencies": {
     "jsonc-parser": "3.3.1",

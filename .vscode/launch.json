@@ -1,0 +1,13 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Guided Review: Extension Development Host",
+      "type": "extensionHost",
+      "request": "launch",
+      "preLaunchTask": "Build Guided Review",
+      "outFiles": ["${workspaceFolder}/out/src/**/*.js"],
+      "args": ["--extensionDevelopmentPath=${workspaceFolder}"]
+    }
+  ]
+}
