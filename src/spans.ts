@@ -251,3 +251,231 @@ export function blockLines(
   }
   return groups;
 }
+const lineText = (line: DiffLine): string => line.text + (line.eol ? "\n" : "");
+
+const inside =
+  (cores: Core[]) =>
+  (index: number): boolean =>
+    cores.some(([s, e]) => s <= index && index <= e);
+
+/** A line of the index text: at is the diff line it is, or undefined if the working file does not have it. */
+interface IndexLine {
+  at?: number;
+  text: string;
+}
+
+/**
+ * Finds each index line in the diff, through the working file's lines and through HEAD's.
+ * Where the two disagree, a context line wins, since equal lines elsewhere can mislead one diff.
+ */
+async function indexLines(diff: FileDiff, text: string): Promise<IndexLine[]> {
+  const byNew = new Map<number, number>();
+  const byOld = new Map<number, number>();
+  diff.lines.forEach((line, index) => {
+    if (line.new !== undefined) byNew.set(line.new, index);
+    if (line.old !== undefined) byOld.set(line.old, index);
+  });
+  const toWorking = new Map<number, number>();
+  for (const line of await diffTexts(text, diff.working ?? ""))
+    if (line.kind === " ") toWorking.set(line.old!, line.new!);
+  const toBase = new Map<number, number>();
+  for (const line of await diffTexts(diff.base ?? "", text))
+    if (line.kind === " ") toBase.set(line.new!, line.old!);
+  let last = -1;
+  return sourceLines(text).map((line, k) => {
+    const working = toWorking.get(k + 1);
+    const base = toBase.get(k + 1);
+    const found = [
+      working === undefined ? undefined : byNew.get(working),
+      base === undefined ? undefined : byOld.get(base),
+    ].filter((at) => at !== undefined);
+    const at =
+      found.find((index) => diff.lines[index].kind === " ") ?? found[0];
+    // A line the two diffs place out of order counts as the index's own.
+    if (at === undefined || at <= last) return { text: line };
+    last = at;
+    return { at, text: line };
+  });
+}
+/**
+ * What happens to each line of the index's own when the cores are staged. Such lines sit in the
+ * gap between the found lines around them. If the gap holds a changed line of the cores and only
+ * changed lines, the block replaces them: "drop". If the gap also holds context lines, the lines
+ * could replace those, and their place next to the block is unknown: "conflict".
+ */
+function ownLines(
+  diff: FileDiff,
+  lines: IndexLine[],
+  inCore: (index: number) => boolean,
+): ("keep" | "drop" | "conflict")[] {
+  const following: number[] = [];
+  let next = diff.lines.length;
+  for (let k = lines.length - 1; k >= 0; k--) {
+    following[k] = next;
+    if (lines[k].at !== undefined) next = lines[k].at!;
+  }
+  let previous = -1;
+  return lines.map((line, k) => {
+    if (line.at !== undefined) {
+      previous = line.at;
+      return "keep";
+    }
+    const gap = diff.lines.slice(previous + 1, following[k]);
+    if (!gap.some((l, i) => l.kind !== " " && inCore(previous + 1 + i)))
+      return "keep";
+    return gap.some((l) => l.kind === " ") ? "conflict" : "drop";
+  });
+}
+/** Whether the index holds every changed line of the cores and nothing else in their place. */
+export async function staged(diff: FileDiff, cores: Core[]): Promise<boolean> {
+  const inCore = inside(cores);
+  const indexed = await readIndex(diff.root, diff.file);
+  // A deleted working file is staged only as a deleted index entry, not as an empty file.
+  if (indexed.text === null && diff.base !== null) return diff.working === null;
+  if (diff.working === null && indexed.text === "") return false;
+  const lines = await indexLines(diff, indexed.text ?? "");
+  const present = new Set(lines.map((line) => line.at));
+  for (const [start, end] of cores) {
+    const expected = diff.lines.flatMap((line, at) =>
+      at >= start && at <= end && line.kind !== "-"
+        ? [{ at, text: lineText(line) }]
+        : [],
+    );
+    const offsets = new Map(expected.map((line, offset) => [line.at, offset]));
+    const anchors = lines.flatMap((line, index) => {
+      const offset = line.at === undefined ? undefined : offsets.get(line.at);
+      return offset === undefined ? [] : [{ index, offset }];
+    });
+    const first = anchors.length ? anchors[0].index - anchors[0].offset : -1;
+    // Git can align an identical boundary line outside the core. Require the
+    // complete excerpt at a position established by its already-matched lines.
+    if (
+      first >= 0 &&
+      anchors.every((anchor) => anchor.index - anchor.offset === first) &&
+      expected.every((line, k) => lines[first + k]?.text === line.text)
+    )
+      for (const line of expected) present.add(line.at);
+  }
+  return (
+    diff.lines.every(
+      (line, index) =>
+        line.kind === " " ||
+        !inCore(index) ||
+        present.has(index) === (line.kind === "+"),
+    ) && ownLines(diff, lines, inCore).every((fate) => fate === "keep")
+  );
+}
+/**
+ * The index text with the cores' changes: their removed lines go, their added lines come in at
+ * their place in the diff, and the index's own lines between them go.
+ */
+function withCores(
+  diff: FileDiff,
+  lines: IndexLine[],
+  inCore: (index: number) => boolean,
+): string {
+  const fates = ownLines(diff, lines, inCore);
+  if (fates.includes("conflict"))
+    throw new Error(
+      `The index holds other changes to ${diff.file} next to these lines. Nothing was staged.`,
+    );
+  const present = new Set(lines.map((line) => line.at));
+  const added = diff.lines.flatMap((line, index) =>
+    line.kind === "+" && inCore(index) && !present.has(index) ? [index] : [],
+  );
+  let text = "";
+  const append = (line: string): void => {
+    if (text && !text.endsWith("\n"))
+      throw new Error(
+        `The block adds lines after the last line of ${diff.file}, which has no newline. Capture the change of that line with it.`,
+      );
+    text += line;
+  };
+  const addBefore = (limit: number): void => {
+    while (added.length && added[0] < limit)
+      append(lineText(diff.lines[added.shift()!]));
+  };
+  lines.forEach((line, k) => {
+    if (line.at === undefined) {
+      if (fates[k] === "keep") append(line.text);
+      return;
+    }
+    addBefore(line.at);
+    if (!(diff.lines[line.at].kind === "-" && inCore(line.at)))
+      append(line.text);
+  });
+  addBefore(diff.lines.length);
+  return text;
+}
+/**
+ * Applies the cores' changed lines to the index and keeps its other staged changes.
+ * revalidate runs while the index is locked and throws if the reader's view went stale;
+ * ensureActive runs right before the index is replaced.
+ */
+export async function stageCores(
+  diff: FileDiff,
+  cores: Core[],
+  revalidate: () => Promise<void>,
+  ensureActive: () => void = () => {},
+): Promise<boolean> {
+  if (
+    ["GIT_INDEX_FILE", "GIT_DIR", "GIT_WORK_TREE"].some(
+      (key) => process.env[key],
+    )
+  )
+    throw new Error(
+      "Custom Git repository/index environment is unsupported for approval staging.",
+    );
+  filePath(diff.file);
+  await checkFilters(diff.root, diff.file);
+  const inCore = inside(cores);
+  async function checkSource(): Promise<void> {
+    const working = await readWorking(diff.root, diff.file);
+    if (working.text !== diff.working || working.mode !== diff.workingMode)
+      throw new Error("Source changed during approval. Nothing was staged.");
+    const head =
+      (
+        await git(
+          diff.root,
+          ["rev-parse", "--verify", "--quiet", "HEAD"],
+          [0, 1],
+        )
+      ).trim() || null;
+    if (head !== diff.head)
+      throw new Error(
+        "HEAD moved since the block was shown. Refresh it. Nothing was staged.",
+      );
+  }
+  const result = await writeIndexEntry(
+    diff.root,
+    diff.file,
+    async (indexed) => {
+      if (indexed.text === null && diff.base !== null) {
+        if (diff.working === null) return { text: null, mode: null };
+        throw new Error(
+          `The index stages the deletion of ${diff.file}. Unstage it first.`,
+        );
+      }
+      const text = withCores(
+        diff,
+        await indexLines(diff, indexed.text ?? ""),
+        inCore,
+      );
+      if (text === "" && diff.working === null && diff.base !== null)
+        return { text: null, mode: null };
+      return {
+        text,
+        mode: indexed.mode ?? diff.workingMode ?? diff.baseMode ?? "100644",
+      };
+    },
+    {
+      async before() {
+        await checkSource();
+        await revalidate();
+      },
+      after: checkSource,
+      ensureActive,
+    },
+  );
+  return result.changed;
+}

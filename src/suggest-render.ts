@@ -1,3 +1,74 @@
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import MarkdownIt from "markdown-it";
+import { filePath } from "./git.js";
+import { escape, hash } from "./util.js";
+import { parseTableRows, type SuggestionPreview } from "./suggestions.js";
+import {
+  blockFingerprint,
+  blockLines,
+  liveDiff,
+  repositoryOf,
+  staged,
+  type Core,
+  type DiffLine,
+  type FileDiff,
+  type Span,
+} from "./spans.js";
+
+type Token = ReturnType<InstanceType<typeof MarkdownIt>["parse"]>[number];
+
+/** What a review-diff fence in a suggest document holds. */
+export interface BlockRef {
+  id: string;
+  /** Repository root, relative to the document's folder. */
+  repo: string;
+  /** Repository-relative file path. */
+  file: string;
+  spans: Span[];
+}
+
+/** Lines of a fence: [first, end) as markdown-it maps them. */
+type Lines = [number, number];
+
+export interface Block {
+  token: number;
+  fence: Lines;
+  /** The indentation of the fence's opening line. */
+  indent: string;
+  ref?: BlockRef;
+  /** Why the fence is not a valid block. */
+  invalid?: string;
+  /** The diff fence right after the block, embedded at approval. */
+  approved?: { text: string; fence: Lines };
+  root?: string;
+  diff?: FileDiff;
+  cores?: Core[];
+  groups?: DiffLine[][];
+  fingerprint?: string;
+  /** Why the spans no longer show the code. */
+  problems: string[];
+  notes: string[];
+}
+
+export interface BlockContext {
+  documentPath: string;
+  /** Whether the document may show this repository. */
+  allowed(root: string): Promise<boolean>;
+  highlight?(
+    file: string,
+    text: string | null,
+    wanted: Set<number>,
+  ): Promise<Map<number, string>>;
+  /** Last known span positions, to flag spans that jump further than the code around them changed. */
+  positions?: Map<string, { start: number; size: number }>;
+  /** Containing document symbol for a resolved target; absence leaves the line-range label. */
+  location?(
+    diff: FileDiff,
+    target: NavigationTarget,
+  ): Promise<string | undefined>;
+}
+
 export interface NavigationTarget {
   id: string;
   old?: [number, number];
@@ -188,6 +259,150 @@ export async function resolveBlocks(
     block.fingerprint = blockFingerprint(diff, block.groups);
   }
 }
+/** The diff fence that marks a block approved, recording what was staged. */
+export function approvalFence(groups: DiffLine[][], indent: string): string {
+  const body = groups.flatMap((group) => [
+    "@@",
+    ...group.flatMap((line) =>
+      line.eol
+        ? [line.kind + line.text]
+        : [line.kind + line.text, "\\ No newline at end of file"],
+    ),
+  ]);
+  const longest = Math.max(
+    0,
+    ...body.map((line) => /^\s*(`*)/.exec(line)![1].length),
+  );
+  const ticks = "`".repeat(Math.max(3, longest + 1));
+  return [`${ticks}diff`, ...body, ticks]
+    .map((line) => indent + line)
+    .join("\n");
+}
+
+/** Inserts or removes a block's approval fence; returns the document unchanged if there is nothing to do. */
+export function setApproval(
+  markdown: string,
+  id: string,
+  groups: DiffLine[][] | undefined,
+): string {
+  const block = parseBlocks(markdown).blocks.find((b) => b.ref?.id === id);
+  if (!block) throw new Error(`The document has no block ${id}.`);
+  const lines = markdown.split("\n");
+  if (groups) {
+    if (block.approved) return markdown;
+    lines.splice(block.fence[1], 0, approvalFence(groups, block.indent));
+  } else {
+    if (!block.approved) return markdown;
+    lines.splice(
+      block.approved.fence[0],
+      block.approved.fence[1] - block.approved.fence[0],
+    );
+  }
+  return lines.join("\n");
+}
+function lineHtml(
+  kind: DiffLine["kind"],
+  text: string,
+  old: number | "",
+  next: number | "",
+  highlighted?: string,
+): string {
+  const name = kind === "+" ? "added" : kind === "-" ? "removed" : "context";
+  return `<div class="diff-line ${name}"><span class="diff-gutter"><span class="line-number">${old}</span><span class="line-number">${next}</span></span><code>${escape(kind)}${highlighted ?? escape(text)}</code></div>`;
+}
+
+async function highlightedHtml(
+  file: string,
+  base: string | null,
+  working: string | null,
+  groups: DiffLine[][],
+  context: BlockContext,
+  showNumbers = true,
+  titles: string[] = [],
+): Promise<string> {
+  const before = new Set<number>();
+  const after = new Set<number>();
+  for (const line of groups.flat()) {
+    if (line.new === undefined) before.add(line.old!);
+    else after.add(line.new);
+  }
+  const [oldHtml, newHtml] = context.highlight
+    ? await Promise.all([
+        context.highlight(file, base, before),
+        context.highlight(file, working, after),
+      ])
+    : [new Map<number, string>(), new Map<number, string>()];
+  return groups
+    .map(
+      (group, index) =>
+        '<div class="hunk">' +
+        (titles[index] ?? '<div class="hunk-title"><span>@@</span></div>') +
+        group
+          .map((line) =>
+            lineHtml(
+              line.kind,
+              line.text,
+              !showNumbers || line.kind === "+" ? "" : (line.old ?? ""),
+              !showNumbers || line.kind === "-" ? "" : (line.new ?? ""),
+              line.new === undefined
+                ? oldHtml.get(line.old!)
+                : newHtml.get(line.new),
+            ),
+          )
+          .join("") +
+        "</div>",
+    )
+    .join("");
+}
+async function approvedHtml(
+  text: string,
+  file: string,
+  context: BlockContext,
+  titles: string[],
+): Promise<string> {
+  const groups = text
+    .split("\n")
+    .reduce<string[][]>((groups, line) => {
+      if (line.startsWith("@@") || !groups.length) groups.push([]);
+      if ([" ", "-", "+"].includes(line[0])) groups.at(-1)!.push(line);
+      return groups;
+    }, [])
+    .filter((group) => group.length);
+  const html: string[] = [];
+  // Approval stores excerpts, not whole files. Restart multiline state at each gap.
+  for (const [index, group] of groups.entries()) {
+    const before: string[] = [];
+    const after: string[] = [];
+    const lines = group.map((line): DiffLine => {
+      const kind = line[0] as DiffLine["kind"];
+      const text = line.slice(1);
+      if (kind !== "+") before.push(text);
+      if (kind !== "-") after.push(text);
+      return {
+        kind,
+        text,
+        eol: true,
+        ...(kind !== "+" && { old: before.length }),
+        ...(kind !== "-" && { new: after.length }),
+      };
+    });
+    html.push(
+      await highlightedHtml(
+        file,
+        before.join("\n"),
+        after.join("\n"),
+        [lines],
+        context,
+        false,
+        [
+          titles[index] ??
+            '<div class="hunk-title"><span>@@ · Original location unavailable.</span></div>',
+        ],
+      ),
+    );
+  }
+  return html.join("");
+}
 function notice(className: string, text: string): string {
   return `<p class="${className}" role="status">${escape(text)}</p>`;
 }
@@ -281,12 +496,17 @@ async function blockHtml(
     : "";
   return `${open}<header>${title}${approve}</header>${block.notes.map((note) => notice("note", note)).join("")}${await highlightedHtml(ref.file, block.diff!.base, block.diff!.working, block.groups!, context, true, titles)}</section>`;
 }
+/** Renders untrusted Markdown with code blocks from the live diff. */
 export async function renderMarkdown(
   markdown: string,
   context: BlockContext,
   approvable: boolean,
+  preview?: SuggestionPreview,
 ): Promise<{ html: string; blocks: Block[] }> {
-  const { tokens, blocks } = parseBlocks(markdown);
+  const { tokens, blocks } =
+    preview === "tableRows"
+      ? { tokens: parseTableRows(markdown), blocks: [] }
+      : parseBlocks(markdown);
   await resolveBlocks(blocks, context);
   const html = new Map<number, string>();
   for (const block of blocks) {
