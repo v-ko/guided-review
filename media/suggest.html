@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'nonce-{{nonce}}' {{cspSource}}; style-src {{cspSource}} 'unsafe-inline'; img-src {{cspSource}} data:; font-src {{cspSource}}; connect-src 'none'; base-uri 'none'; form-action 'none';"
+    />
+    <link rel="stylesheet" href="{{styleUri}}" />
+  </head>
+  <body>
+    <header class="toolbar">
+      <strong>Suggestions</strong>
+      <span id="document-name"></span>
+      <span id="status">Loading…</span>
+      <span id="agent" data-state="away">No agent</span>
+      <button id="open-document" class="secondary">Open document</button>
+    </header>
+    <main>
+      <article id="document" class="markdown"></article>
+      <div
+        id="column-divider"
+        class="divider"
+        role="separator"
+        aria-label="Document width"
+        aria-orientation="vertical"
+        tabindex="0"
+      ></div>
+      <aside id="sidebar">
+        <div id="suggestions"></div>
+        <section id="comment-panel" hidden>
+          <div
+            id="comment-divider"
+            class="divider"
+            role="separator"
+            aria-label="Comment height"
+            aria-orientation="horizontal"
+            tabindex="0"
+          ></div>
+          <button
+            id="comment-toggle"
+            class="secondary"
+            type="button"
+            aria-expanded="true"
+            aria-controls="comment-content"
+          >
+            Comment
+          </button>
+          <div id="comment-content">
+            <div
+              id="comment-reply"
+              class="markdown"
+              role="status"
+              aria-live="polite"
+            ></div>
+          </div>
+        </section>
+      </aside>
+    </main>
+    <form id="prompt">
+      <div id="selection" hidden>
+        <span id="selection-source"></span>
+        <span id="selection-text"></span>
+        <button type="button" id="selection-clear" aria-label="Clear selection">
+          ×
+        </button>
+      </div>
+      <div class="prompt-row">
+        <input
+          id="prompt-text"
+          type="text"
+          autocomplete="off"
+          placeholder="Optional guidance for the next suggestions (select text to refer to it)"
+        />
+        <span id="declined"></span>
+        <button id="prompt-send">Suggest</button>
+        <button id="prompt-cancel" type="button" class="secondary" hidden>
+          Cancel
+        </button>
+      </div>
+    </form>
+    <script
+      id="client"
+      nonce="{{nonce}}"
+      type="module"
+      src="{{clientUri}}"
+      data-mermaid="{{mermaidUri}}"
+    ></script>
+  </body>
+</html>

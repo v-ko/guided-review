@@ -1,0 +1,40 @@
+#comment-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 var(--comment-height, 200px);
+  min-height: min(160px, 65%);
+  max-height: 65%;
+  overflow: hidden;
+}
+#comment-panel[hidden] {
+  display: none;
+}
+#comment-toggle {
+  flex-shrink: 0;
+  text-align: left;
+  margin: 4px 12px;
+}
+#comment-toggle::before {
+  content: "\25BE  ";
+}
+#comment-panel.collapsed {
+  flex-basis: auto;
+  min-height: 0;
+}
+#comment-panel.collapsed #comment-content,
+#comment-panel.collapsed #comment-divider {
+  display: none;
+}
+#comment-panel.collapsed #comment-toggle::before {
+  content: "\25B8  ";
+}
+#comment-content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  margin: 0 12px 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 12px 12px 3px 12px;
+  background: var(--vscode-editor-background);
+}

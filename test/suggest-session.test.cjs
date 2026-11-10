@@ -9,16 +9,16 @@ const { Session } = require("../out/src/suggest-session.js");
 const { decodePageMessage } = require("../out/src/suggest-protocol.js");
 const { renderMarkdown } = require("../out/src/suggest-render.js");
 
-test("headerless row suggestions survive reload, render safely and accept as exact source", async (t) => {
+test("structural rows survive reload and render safely; legacy source edits stay unappliable", async (t) => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "guided-review-rows-"));
   const documents = {
-    render: async (markdown, documentPath, approvable, preview) =>
+    render: async (markdown, documentPath, approvable, operation) =>
       (
         await renderMarkdown(
           markdown,
           { documentPath, allowed: async () => false },
           approvable,
-          preview,
+          operation,
         )
       ).html,
     outdated: async () => [],
@@ -35,28 +35,41 @@ test("headerless row suggestions survive reload, render safely and accept as exa
     "| GR | Sivkit | Comparison |\n| --- | --- | --- |\n" + row + "\n";
   await fs.writeFile(session.documentPath, source);
   const replacement =
-    "\n| **Queue** | `a\\|b` | <script>bad()</script> |\n| [Link](https://example.com) | ![img](https://example.com/x.png) | More |";
+    "| **Queue** | `a\\|b` | <script>bad()</script> |\n| [Link](https://example.com) | ![img](https://example.com/x.png) | More |";
 
-  // Invalid row hints are refused before saving; acceptance never gets a disguised paragraph.
+  // Invalid rows are refused before saving; acceptance never gets a disguised paragraph.
   const rejected = await session.add([
-    { replacement: "ordinary paragraph", preview: "tableRows" },
-    { replacement: "| a | b |\n| c |", preview: "tableRows" },
-    { replacement: "| a | b |\n| --- | --- |", preview: "tableRows" },
+    {
+      replacement: "ordinary paragraph",
+      after: "Session",
+      operation: "insert-table-rows",
+    },
+    {
+      replacement: "| a | b |\n| c |",
+      after: "Session",
+      operation: "insert-table-rows",
+    },
+    {
+      replacement: "| a | b |\n| --- | --- |",
+      after: "Session",
+      operation: "insert-table-rows",
+    },
     {
       replacement: "| a | b |\r| --- | --- |\r| c | d | HIDDEN |",
-      preview: "tableRows",
+      operation: "insert-table-rows",
+      after: "Session",
     },
   ]);
   assert.equal(rejected.rejected.length, 4);
   assert.ok(
     rejected.rejected.every(({ problems }) =>
-      problems.join().includes("tableRows"),
+      problems.join().includes("insert-table-rows"),
     ),
   );
   assert.deepEqual(await session.list(), []);
   assert.deepEqual(
     await session.add([
-      { mode: "literal", after: row, replacement, preview: "tableRows" },
+      { operation: "insert-table-rows", after: "Session", replacement },
     ]),
     { added: ["s1"], rejected: [] },
   );
@@ -68,8 +81,7 @@ test("headerless row suggestions survive reload, render safely and accept as exa
   await restored.start();
   const [saved] = await restored.list({ includeContent: true });
   assert.equal(saved.replacement, replacement);
-  assert.equal(saved.mode, "literal");
-  assert.equal(saved.preview, "tableRows");
+  assert.equal(saved.operation, "insert-table-rows");
   const view = await restored.view();
   const html = view.suggestions[0].html;
   assert.equal((html.match(/<tr>/g) ?? []).length, 2);
@@ -84,11 +96,43 @@ test("headerless row suggestions survive reload, render safely and accept as exa
   assert.equal(await restored.accept("s1", view.fingerprint), undefined);
   assert.equal(
     await restored.readDocument(),
-    source.replace(row, row + replacement),
+    source.replace(row, row + "\n" + replacement),
   );
   const accepted = await restored.view();
-  assert.equal((accepted.document.match(/<table>/g) ?? []).length, 1);
-  assert.equal((accepted.document.match(/<tr>/g) ?? []).length, 4);
+  assert.equal((accepted.document.match(/<table(?: |>)/g) ?? []).length, 1);
+  assert.equal((accepted.document.match(/<tr(?: |>)/g) ?? []).length, 4);
+
+  // A proposal saved by the old API stays inspectable, but cannot become a block edit on reload.
+  restored.close();
+  await fs.writeFile(
+    path.join(dir, "suggestions.json"),
+    JSON.stringify({
+      nextId: 3,
+      suggestions: [
+        {
+          id: "s2",
+          mode: "literal",
+          after: row,
+          replacement: "\n| Old | Row | Proposal |",
+          preview: "tableRows",
+        },
+      ],
+    }),
+  );
+  const legacy = new Session(dir, documents);
+  t.after(() => legacy.close());
+  await legacy.start();
+  const [old] = await legacy.list({ includeContent: true });
+  assert.match(old.problems.join(), /Legacy literal/);
+  assert.match(old.replacement, /Old/);
+  const before = await legacy.readDocument();
+  assert.match(
+    await legacy.accept("s2", (await legacy.view()).fingerprint),
+    /Legacy literal/,
+  );
+  assert.equal(await legacy.readDocument(), before);
+  await legacy.remove(["s2"]);
+  assert.deepEqual(await legacy.list(), []);
 });
 
 test("pending suggestions can be recovered with exact Markdown and inspected without mutation", async (t) => {
@@ -144,6 +188,7 @@ test("pending suggestions can be recovered with exact Markdown and inspected wit
     /Unknown suggestion ids/,
   );
 });
+
 test("reader requests can be answered with comments or suggestions without changing the document", async (t) => {
   const dir = await fs.mkdtemp(
     path.join(os.tmpdir(), "guided-review-comments-"),
@@ -187,8 +232,11 @@ test("reader requests can be answered with comments or suggestions without chang
   ]);
   const document = await session.readDocument();
   const suggestions = await session.list();
-  await assert.rejects(session.respondToComment(" "), /needs text/);
-  await session.respondToComment("**Because.**");
+  assert.equal(await session.readComment(), null);
+  await assert.rejects(session.addComment(" "), /needs text/);
+  const firstComment = await session.addComment("**Because.**");
+  assert.deepEqual(await session.readComment(), firstComment);
+  assert.equal(firstComment.markdown, "**Because.**");
   assert.equal((await session.view()).comment.html, "**Because.**");
   assert.equal(await session.readDocument(), document);
   assert.deepEqual(await session.list(), suggestions);
@@ -198,12 +246,16 @@ test("reader requests can be answered with comments or suggestions without chang
   await session.wait("next-comment", 100);
   await session.add([{ replacement: "Then we continue." }]);
   assert.equal((await session.view()).comment.html, "**Because.**");
-  await session.respondToComment("Then we continue.");
+  const nextComment = session.addComment("Then we continue.");
+  const recovered = await session.readComment();
+  assert.deepEqual(recovered, await nextComment);
+  assert.notEqual(recovered.revision, firstComment.revision);
   const savedComment = (await session.view()).comment;
   const restored = new Session(dir, documents);
   await restored.start();
   try {
     assert.deepEqual((await restored.view()).comment, savedComment);
+    assert.deepEqual(await restored.readComment(), recovered);
   } finally {
     restored.close();
   }

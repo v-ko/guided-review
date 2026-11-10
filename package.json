@@ -42,6 +42,193 @@
         "userDescription": "Capture saved local changes into a private review snapshot.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "guidedCodeReviewCapture",
+      {
+        "name": "guidedReview_waitForFeedback",
+        "displayName": "Wait for suggestion session feedback",
+        "modelDescription": "Wait until the reader sends a request in the suggestion session, or the timeout ends. Choose whether to answer with guidedReview_addComment or offer suggestions based on the reader's text and context. Requests report accepted and declined suggestions and outdated code blocks. Returns events, current suggestions and document path. Suggestions are compact by default; includeContent=true includes their exact replacement Markdown. After responding, wait for feedback; on timeout, wait again without advancing.",
+        "userDescription": "Wait for a request from the suggestion session.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "guidedReviewWait",
+        "icon": "$(watch)",
+        "when": "isWorkspaceTrusted",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "session": {
+              "type": "string",
+              "description": "Name of the suggestion session."
+            },
+            "timeoutSeconds": {
+              "type": "number",
+              "description": "1-600, default 60."
+            },
+            "includeContent": {
+              "type": "boolean",
+              "description": "Include exact replacement Markdown in returned suggestions. Default false."
+            }
+          },
+          "required": [
+            "session"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "guidedReview_addSuggestions",
+        "displayName": "Add suggestions",
+        "modelDescription": "Add suggestions to a suggestion session; they appear on top in the given order. Follow the user's task and present at most 2-3 bullet points at a time, then wait for feedback. Each replaces the span from..to, inserts after a quote, or appends to the end without an anchor. All document changes go through suggestions; only the reader accepts them. Returns the new ids and the rejected items with their problems.",
+        "userDescription": "Show suggestions in the suggestion session.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "guidedReviewAdd",
+        "icon": "$(add)",
+        "when": "isWorkspaceTrusted",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "session": {
+              "type": "string",
+              "description": "Name of the suggestion session."
+            },
+            "suggestions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "replacement": {
+                    "type": "string",
+                    "description": "Replacement Markdown. Supply whole fences for examples/diagrams, list items for insert-list-items, or headerless pipe-table rows for insert-table-rows. The operation supplies surrounding spacing."
+                  },
+                  "operation": {
+                    "type": "string",
+                    "enum": [
+                      "replace",
+                      "insert-block",
+                      "insert-list-items",
+                      "insert-table-rows"
+                    ],
+                    "description": "Explicit structural edit. replace uses from/to and keeps fences, recorded approvals and tables whole. insert-block inserts outside the quoted container. insert-list-items adds single-line siblings after a whole item, preserving its marker style; existing numbers are not renumbered. insert-table-rows adds equal-width headerless rows after a body row or the header delimiter. Missing/ambiguous anchors and unsupported structures are errors. If omitted, from/to means replace; otherwise insert-block."
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "layout",
+                      "edit"
+                    ],
+                    "description": "layout (default) restructures without rewording; edit changes wording and needs from/to."
+                  },
+                  "from": {
+                    "type": "string",
+                    "description": "Unique plain-text quote where replace starts. Markdown inline syntax can be omitted."
+                  },
+                  "to": {
+                    "type": "string",
+                    "description": "Plain-text quote where replace ends, inclusive. Use an unambiguous end quote."
+                  },
+                  "after": {
+                    "type": "string",
+                    "description": "Unique plain-text quote identifying the insertion target. Required for list/table insertion. For insert-block, omit to append. Do not supply separator newlines."
+                  }
+                },
+                "required": [
+                  "replacement"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "session",
+            "suggestions"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "guidedReview_listSuggestions",
+        "displayName": "List suggestions",
+        "modelDescription": "List suggestions in saved order with their anchors, kind, current problems and exact replacement Markdown. Optionally inspect only the supplied ids; unknown ids are errors, and an empty ids array returns no items. Set includeContent=false for a compact inventory without replacement text. Does not edit the document, suggestions or staging.",
+        "userDescription": "List the suggestions in the suggestion session.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "guidedReviewList",
+        "icon": "$(list-flat)",
+        "when": "isWorkspaceTrusted",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "session": {
+              "type": "string",
+              "description": "Name of the suggestion session."
+            },
+            "ids": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": "Inspect only these suggestion ids, in saved order. Omit for all; unknown ids are errors."
+            },
+            "includeContent": {
+              "type": "boolean",
+              "description": "Include exact replacement Markdown. Default true."
+            }
+          },
+          "required": [
+            "session"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "guidedReview_addComment",
+        "displayName": "Add a session comment",
+        "modelDescription": "Add a Markdown explanation or discussion comment to a suggestion session. Currently only the latest comment is retained and displayed; this does not append a history. Returns its revision and exact Markdown. Does not change proposals, document content or staging. Recover the latest saved comment with guidedReview_readComment after reconnecting.",
+        "userDescription": "Show a comment in the suggestion session's comment panel.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "guidedReviewAddComment",
+        "icon": "$(comment)",
+        "when": "isWorkspaceTrusted",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "session": {
+              "type": "string",
+              "description": "Name of the suggestion session."
+            },
+            "markdown": {
+              "type": "string",
+              "description": "Nonempty Markdown comment."
+            }
+          },
+          "required": [
+            "session",
+            "markdown"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "guidedReview_readComment",
+        "displayName": "Read the latest session comment",
+        "modelDescription": "Recover the latest saved agent comment as {comment: {revision, markdown}}, or {comment: null} if none exists. Read after opening/rejoining a session before replacing an earlier explanation. Returns exact Markdown, not rendered HTML. Does not change session state, document content or staging. Currently only the latest comment is retained, not a history of reader requests.",
+        "userDescription": "Read the latest saved session comment.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "guidedReviewReadComment",
+        "icon": "$(comment)",
+        "when": "isWorkspaceTrusted",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "session": {
+              "type": "string",
+              "description": "Name of the suggestion session."
+            }
+          },
+          "required": [
+            "session"
+          ],
+          "additionalProperties": false
+        }
+      },
         "icon": "$(diff)",
         "when": "isWorkspaceTrusted",
         "inputSchema": {

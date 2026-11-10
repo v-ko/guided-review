@@ -3,7 +3,7 @@ import * as path from "node:path";
 import MarkdownIt from "markdown-it";
 import { filePath } from "./git.js";
 import { escape, hash } from "./util.js";
-import { parseTableRows, type SuggestionPreview } from "./suggestions.js";
+import { parseTableRows, type SuggestionOperation } from "./suggestions.js";
 import {
   blockFingerprint,
   blockLines,
@@ -127,6 +127,7 @@ export function navigationTargets(block: Block): NavigationTarget[] {
   }
   return targets;
 }
+const md = new MarkdownIt({ html: false, linkify: false, breaks: false });
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -501,12 +502,17 @@ export async function renderMarkdown(
   markdown: string,
   context: BlockContext,
   approvable: boolean,
-  preview?: SuggestionPreview,
+  operation?: SuggestionOperation,
 ): Promise<{ html: string; blocks: Block[] }> {
   const { tokens, blocks } =
-    preview === "tableRows"
+    operation === "insert-table-rows"
       ? { tokens: parseTableRows(markdown), blocks: [] }
       : parseBlocks(markdown);
+  for (const token of tokens)
+    if (approvable && token.nesting === 1 && token.map) {
+      token.attrSet("data-source-start", String(token.map[0]));
+      token.attrSet("data-source-end", String(token.map[1]));
+    }
   await resolveBlocks(blocks, context);
   const html = new Map<number, string>();
   for (const block of blocks) {
@@ -528,7 +534,11 @@ export async function renderMarkdown(
     if (!rendered) return "";
     const block = blocks.find((block) => block.token === index);
     const source = list[index].content + (block?.approved?.text ?? "");
-    return `<div class="anchor-block" data-anchor-source="${escape(source)}">${rendered}</div>`;
+    const map = list[index].map;
+    const position = map
+      ? ` data-source-start="${map[0]}" data-source-end="${map[1]}"`
+      : "";
+    return `<div class="anchor-block" data-anchor-source="${escape(source)}"${position}>${rendered}</div>`;
   };
   // Documents cannot embed remote images or navigate the page.
   renderer.rules.image = (list, index) =>

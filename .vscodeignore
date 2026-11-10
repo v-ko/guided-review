@@ -1,0 +1,8 @@
+# Only compiled host/browser modules, the webview shell/styles and bundled skill resources.
+out/!(src|media)
+out/!(src|media)/**
+out/src/!(*.js)
+out/src/*/**
+out/media/!(*.mjs)
+out/media/*/**
+media/!(suggest.css|suggest.html)

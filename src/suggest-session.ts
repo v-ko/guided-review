@@ -15,7 +15,7 @@ import {
   checkSuggestion,
   resolve,
   type Suggestion,
-  type SuggestionPreview,
+  type SuggestionOperation,
 } from "./suggestions.js";
 
 /** A code block in the document whose spans no longer match the code. */
@@ -32,7 +32,7 @@ export interface Documents {
     markdown: string,
     documentPath: string,
     approvable: boolean,
-    preview?: SuggestionPreview,
+    operation?: SuggestionOperation,
   ): Promise<string>;
   outdated(markdown: string, documentPath: string): Promise<OutdatedBlock[]>;
   /** Whether an editor holds unsaved changes to the document. */
@@ -85,8 +85,7 @@ function summarize(
     to: s.to,
     after: s.after,
     kind: s.kind ?? "layout",
-    ...(s.mode && { mode: s.mode }),
-    ...(s.preview && { preview: s.preview }),
+    ...(s.operation && { operation: s.operation }),
     problems: resolve(document, s).problems,
     ...(includeContent && { replacement: s.replacement }),
   };
@@ -218,11 +217,12 @@ export class Session extends EventEmitter {
       suggestions: await Promise.all(
         suggestions.map(async (s) => ({
           ...summarize(document, s),
+          target: resolve(document, s).span?.target,
           html: await this.documents.render(
             s.replacement,
             this.documentPath,
             false,
-            s.preview,
+            s.operation,
           ),
         })),
       ),
@@ -306,15 +306,7 @@ export class Session extends EventEmitter {
       if (!suggestion) return `Unknown suggestion ${id}.`;
       const { span, problems } = resolve(document, suggestion);
       if (!span) return problems.join(" ");
-      const error = await this.write(
-        document,
-        applySuggestion(
-          document,
-          span,
-          suggestion.replacement,
-          suggestion.mode,
-        ),
-      );
+      const error = await this.write(document, applySuggestion(document, span));
       if (error) return error;
       this.store.suggestions = this.store.suggestions.filter(
         (s) => s !== suggestion,
@@ -354,11 +346,27 @@ export class Session extends EventEmitter {
     });
   }
 
-  respondToComment(reply: string): Promise<void> {
+  addComment(
+    markdown: string,
+  ): Promise<{ revision: string; markdown: string }> {
     return this.serial(async () => {
-      if (!reply.trim()) throw new Error("A comment reply needs text.");
-      this.store.comment = { revision: randomUUID(), reply };
+      if (!markdown.trim()) throw new Error("A comment needs text.");
+      const revision = randomUUID();
+      this.store.comment = { revision, reply: markdown };
       await this.save();
+      return { revision, markdown };
+    });
+  }
+
+  readComment(): Promise<{ revision: string; markdown: string } | null> {
+    return this.serial(async () => {
+      const comment = this.store.comment;
+      return comment?.reply === undefined
+        ? null
+        : {
+            revision: comment.revision ?? comment.reply,
+            markdown: comment.reply,
+          };
     });
   }
 

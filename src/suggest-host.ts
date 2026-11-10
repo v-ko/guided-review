@@ -104,6 +104,217 @@ export function registerSuggestHost(
     };
   }
 
+  function headUri(diff: FileDiff, emptyWorking = false): vscode.Uri {
+    return vscode.Uri.from({
+      scheme: "layout-suggest-git",
+      path: `/${emptyWorking ? "working" : "HEAD"}/${diff.file}`,
+      query: JSON.stringify({
+        root: diff.root,
+        file: diff.file,
+        head: emptyWorking || diff.base === null ? null : diff.head,
+      }),
+    });
+  }
+
+  context.subscriptions.push(
+    vscode.workspace.registerTextDocumentContentProvider("layout-suggest-git", {
+      async provideTextDocumentContent(uri) {
+        const value: unknown = JSON.parse(uri.query);
+        if (!value || typeof value !== "object")
+          throw new Error("Invalid Git document.");
+        const entry = value as Record<string, unknown>;
+        filePath(entry.file);
+        if (
+          typeof entry.root !== "string" ||
+          !(
+            entry.head === null ||
+            (typeof entry.head === "string" &&
+              /^[0-9a-f]{40,64}$/.test(entry.head))
+          )
+        )
+          throw new Error("Invalid Git document.");
+        const root = await fs.realpath(entry.root);
+        if (!(await allowed(root)) || (await repositoryOf(root)) !== root)
+          throw new Error("The Git document is outside the open workspace.");
+        return entry.head === null
+          ? ""
+          : git(root, ["show", `${entry.head}:${entry.file}`]);
+      },
+    }),
+  );
+
+  async function location(
+    diff: FileDiff,
+    target: NavigationTarget,
+  ): Promise<string | undefined> {
+    const uri = target.next
+      ? vscode.Uri.file(path.join(diff.root, diff.file))
+      : headUri(diff);
+    const source = target.next ? diff.working : diff.base;
+    try {
+      const document = await vscode.workspace.openTextDocument(uri);
+      if (document.getText() !== source) return undefined;
+      const symbols = await vscode.commands.executeCommand<
+        (vscode.DocumentSymbol | vscode.SymbolInformation)[] | undefined
+      >("vscode.executeDocumentSymbolProvider", uri);
+      const range = target.next ?? target.old!;
+      let found: string | undefined;
+      let size = Infinity;
+      const visit = (
+        items: (vscode.DocumentSymbol | vscode.SymbolInformation)[],
+        parents: string[],
+      ): void => {
+        for (const symbol of items) {
+          const extent =
+            "location" in symbol ? symbol.location.range : symbol.range;
+          const names = [...parents, symbol.name];
+          if (
+            ![
+              vscode.SymbolKind.Variable,
+              vscode.SymbolKind.Constant,
+              vscode.SymbolKind.Field,
+              vscode.SymbolKind.Property,
+              vscode.SymbolKind.EnumMember,
+            ].includes(symbol.kind) &&
+            extent.start.line <= range[0] - 1 &&
+            extent.end.line >= range[1] - 1 &&
+            extent.end.line - extent.start.line < size
+          ) {
+            found = names.join(".");
+            size = extent.end.line - extent.start.line;
+          }
+          if ("children" in symbol) visit(symbol.children, names);
+        }
+      };
+      visit(symbols ?? [], []);
+      return found;
+    } catch (error) {
+      console.warn(
+        `Suggest diff location lookup failed for ${diff.file}:`,
+        error,
+      );
+      return undefined;
+    }
+  }
+
+  function selection(
+    document: vscode.TextDocument,
+    lines: [number, number] | undefined,
+    point: number,
+  ): vscode.Selection {
+    const start = Math.min(
+      document.lineCount - 1,
+      Math.max(0, (lines?.[0] ?? point) - 1),
+    );
+    const end = Math.min(
+      document.lineCount - 1,
+      Math.max(start, (lines?.[1] ?? point) - 1),
+    );
+    return new vscode.Selection(
+      start,
+      0,
+      end,
+      lines ? document.lineAt(end).text.length : 0,
+    );
+  }
+  async function navigate(
+    entry: Entry,
+    message: NavigateMessage,
+  ): Promise<void> {
+    const markdown = await entry.session.readDocument();
+    const { blocks } = parseBlocks(markdown);
+    await resolveBlocks(blocks, blockContext(entry.session.documentPath));
+    const block = blocks.find((block) => block.ref?.id === message.block);
+    const target =
+      block &&
+      navigationTargets(block).find((target) => target.id === message.target);
+    if (!block?.diff || !target || entry.closed)
+      throw new Error(
+        "The original location is unavailable. Capture the block again.",
+      );
+    const diff = block.diff;
+    const file = vscode.Uri.file(path.join(diff.root, diff.file));
+    const column = entry.panel?.viewColumn ?? vscode.ViewColumn.Active;
+    const working =
+      diff.working === null
+        ? undefined
+        : await vscode.workspace.openTextDocument(file);
+    if (working && working.getText() !== diff.working)
+      throw new Error(
+        "The working file has unsaved changes. Save it before navigating.",
+      );
+    if (message.type === "source") {
+      if (!working)
+        throw new Error(
+          "This file was deleted. Use Open diff to inspect its original location.",
+        );
+      const range = selection(working, target.next, target.workingLine);
+      const editor = await vscode.window.showTextDocument(working, {
+        viewColumn: column,
+        preview: true,
+        selection: range,
+      });
+      editor.selection = range;
+      editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
+      return;
+    }
+    const before = headUri(diff);
+    const after = working?.uri ?? headUri(diff, true);
+    await vscode.commands.executeCommand(
+      "vscode.diff",
+      before,
+      after,
+      `${diff.file} (HEAD ↔ working)`,
+      {
+        viewColumn: column,
+        preview: true,
+        ...(working && {
+          selection: selection(working, target.next, target.workingLine),
+        }),
+      },
+    );
+    // Opening a native diff can finish before its text editors are exposed.
+    await new Promise<void>((resolve, reject) => {
+      const desired = target.next ? after : before;
+      const apply = (): void => {
+        let found = false;
+        for (const editor of vscode.window.visibleTextEditors) {
+          const uri = editor.document.uri.toString();
+          const old = uri === before.toString();
+          if (!old && uri !== after.toString()) continue;
+          if (
+            column !== vscode.ViewColumn.Active &&
+            editor.viewColumn !== undefined &&
+            editor.viewColumn !== column
+          )
+            continue;
+          const range = selection(
+            editor.document,
+            old ? target.old : target.next,
+            old ? (target.old?.[0] ?? 1) : target.workingLine,
+          );
+          editor.selection = range;
+          editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
+          found ||= uri === desired.toString();
+        }
+        if (found) {
+          clearTimeout(timeout);
+          subscription.dispose();
+          resolve();
+        }
+      };
+      const subscription = vscode.window.onDidChangeVisibleTextEditors(apply);
+      const timeout = setTimeout(() => {
+        subscription.dispose();
+        reject(
+          new Error(
+            "The comparison opened, but its target editor is unavailable.",
+          ),
+        );
+      }, 3000);
+      apply();
+    });
+  }
   async function watchTargets(blocks: Block[]): Promise<WatchTargets> {
     const gitPaths = new Set<string>();
     const files = new Set<string>();
@@ -132,7 +343,7 @@ export function registerSuggestHost(
 
   function documents(entry: () => Entry): Documents {
     return {
-      async render(markdown, documentPath, approvable, preview) {
+      async render(markdown, documentPath, approvable, operation) {
         const { html, blocks } = await renderMarkdown(
           markdown,
           blockContext(
@@ -140,7 +351,7 @@ export function registerSuggestHost(
             approvable ? entry().positions : undefined,
           ),
           approvable,
-          preview,
+          operation,
         );
         if (approvable)
           void entry()
@@ -188,6 +399,26 @@ export function registerSuggestHost(
       }
     }
   }
+  function validName(name: unknown): name is string {
+    return typeof name === "string" && /^[a-z0-9][a-z0-9_-]{0,63}$/.test(name);
+  }
+
+  async function sessionNames(): Promise<string[]> {
+    const names = await fs.readdir(storage).catch(() => []);
+    return names.filter(validName).sort();
+  }
+
+  /** The document a stored session works on, without loading it. */
+  async function storedDocument(name: string): Promise<string | undefined> {
+    try {
+      const store = JSON.parse(
+        await fs.readFile(path.join(storage, name, "suggestions.json"), "utf8"),
+      ) as { document?: unknown };
+      return typeof store.document === "string" ? store.document : undefined;
+    } catch {
+      return undefined;
+    }
+  }
   function load(name: string): Promise<Entry> {
     const loaded = entries.get(name);
     if (loaded) return Promise.resolve(loaded);
@@ -223,6 +454,29 @@ export function registerSuggestHost(
     }
     return task;
   }
+  /** A loaded session the agent names; it must exist already. */
+  async function named(input: unknown): Promise<Entry> {
+    const name = (input as Partial<SessionInput> | undefined)?.session;
+    if (!validName(name) || !(await sessionNames()).includes(name))
+      throw new Error(
+        `Unknown session ${String(name)}. Start one with guidedReview_openSession.`,
+      );
+    return load(name);
+  }
+
+  async function uniqueName(base: string): Promise<string> {
+    const taken = new Set(await sessionNames());
+    const slug =
+      base
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]+/g, "-")
+        .replace(/^[-_]+|-+$/g, "")
+        .slice(0, 50) || "session";
+    let name = slug;
+    for (let n = 2; taken.has(name); n++) name = `${slug}-${n}`;
+    return name;
+  }
+
   /**
    * Joins the suggestion session of a Markdown file, or starts one with a blank document.
    * Opens run one at a time, so two cannot take the same name.
@@ -249,7 +503,15 @@ export function registerSuggestHost(
     if (error) throw new Error(error);
     return entry;
   }
-  function show(entry: Entry, restored?: vscode.WebviewPanel): void {
+  async function show(
+    entry: Entry,
+    restored?: vscode.WebviewPanel,
+  ): Promise<void> {
+    const template = await fs.readFile(
+      vscode.Uri.joinPath(context.extensionUri, "media", "suggest.html").fsPath,
+      "utf8",
+    );
+    if (entry.closed) throw new Error("The session was deleted while opening.");
     if (entry.panel) {
       if (restored) restored.dispose();
       entry.panel.reveal();
@@ -282,12 +544,18 @@ export function registerSuggestHost(
     if (stale.length) void vscode.window.tabGroups.close(stale);
     panel.title = title;
     panel.webview.options = options;
+    try {
+      panel.webview.html = webviewHtml(
+        template,
+        vscode,
+        panel.webview,
+        context.extensionUri,
+      );
+    } catch (error) {
+      panel.dispose();
+      throw error;
+    }
     entry.panel = panel;
-    panel.webview.html = webviewHtml(
-      vscode,
-      panel.webview,
-      context.extensionUri,
-    );
     const subscriptions = [
       panel.webview.onDidReceiveMessage((message: unknown) =>
         handle(entry, message),
@@ -369,6 +637,198 @@ export function registerSuggestHost(
       return setApproval(document, id, groups);
     });
   }
+  async function handle(entry: Entry, raw: unknown): Promise<void> {
+    const message = decodePageMessage(raw);
+    if (!message) return;
+    const session = entry.session;
+    if (message.type === "ready") {
+      post(entry, session.status());
+      return render(entry);
+    }
+    let error: string | undefined;
+    try {
+      switch (message.type) {
+        case "malformed":
+          error = "Malformed message.";
+          break;
+        case "accept":
+          error = await session.accept(message.id, message.fingerprint);
+          break;
+        case "request": {
+          const { call: _call, ...request } = message;
+          error = await session.request(request);
+          break;
+        }
+        case "cancel":
+          error = await session.withdraw(message.id);
+          break;
+        case "open":
+          await vscode.window.showTextDocument(
+            vscode.Uri.file(session.documentPath),
+            { viewColumn: entry.panel?.viewColumn ?? vscode.ViewColumn.Active },
+          );
+          break;
+        case "source":
+        case "diff":
+          await navigate(entry, message);
+          break;
+        case "approve":
+          await approve(entry, message.block, message.fingerprint);
+          break;
+        case "unapprove":
+          await session.edit(async (document) =>
+            setApproval(document, message.block, undefined),
+          );
+          break;
+      }
+    } catch (failure) {
+      error = (failure as Error).message;
+    }
+    post(entry, { type: "reply", call: message.call, ...(error && { error }) });
+  }
+  async function capture(entry: Entry, input: CaptureInput): Promise<object> {
+    if (!Array.isArray(input.files) || !input.files.length)
+      throw new Error("files must list at least one file.");
+    const documentPath = entry.session.documentPath;
+    const { blocks } = parseBlocks(await entry.session.readDocument());
+    await resolveBlocks(blocks, blockContext(documentPath));
+    const results: object[] = [];
+    for (const { file, ranges } of input.files) {
+      const problems: string[] = [];
+      try {
+        if (typeof file !== "string" || !path.isAbsolute(file))
+          throw new Error(`Use an absolute file path: ${String(file)}`);
+        const real = path.join(
+          await fs.realpath(path.dirname(file)),
+          path.basename(file),
+        );
+        const root = await repositoryOf(path.dirname(real));
+        if (!(await allowed(root)))
+          throw new Error("The file is outside the open workspace.");
+        const relative = path.relative(root, real).split(path.sep).join("/");
+        const diff = await liveDiff(root, relative);
+        const taken = blocks.flatMap((b) =>
+          b.root === root &&
+          b.ref?.file === relative &&
+          b.ref.id !== input.block &&
+          b.cores
+            ? b.cores.map((core) => ({ core, id: b.ref!.id }))
+            : [],
+        );
+        let cores: Core[];
+        if (ranges?.length) {
+          const parsed = rangeCores(diff, ranges);
+          problems.push(...parsed.problems);
+          cores = [];
+          for (const core of parsed.cores) {
+            const other =
+              taken.find((t) => overlaps(core, t.core, diff))?.id ??
+              (cores.some((c) => overlaps(core, c, diff))
+                ? "this call"
+                : undefined);
+            if (other)
+              problems.push(
+                `Lines ${describe(diff, core)} overlap ${other === "this call" ? "another range" : `block ${other}`}.`,
+              );
+            else cores.push(core);
+          }
+        } else
+          cores = uncoveredCores(
+            diff,
+            taken.map((t) => t.core),
+          );
+        const spans: (Span & { shows: string })[] = [];
+        const captured: Core[] = [];
+        for (const core of cores) {
+          const span = diff.span(core);
+          if (span) {
+            spans.push({ ...span, shows: describe(diff, core) });
+            captured.push(core);
+          } else
+            problems.push(
+              `Lines ${describe(diff, core)} repeat too often to anchor uniquely.`,
+            );
+        }
+        const repo =
+          path
+            .relative(path.dirname(documentPath), root)
+            .split(path.sep)
+            .join("/") || ".";
+        results.push({
+          file,
+          ...(spans.length && {
+            block: {
+              repo,
+              file: relative,
+              spans: spans.map(({ shows: _shows, ...span }) => span),
+            },
+            shows: spans.map((s) => s.shows),
+            inspection: captureInspection(diff, spans, captured),
+          }),
+          ...(!ranges?.length && !spans.length && { covered: true }),
+          ...(problems.length && { problems }),
+        });
+      } catch (error) {
+        results.push({
+          file,
+          problems: [...problems, (error as Error).message],
+        });
+      }
+    }
+    return { files: results };
+  }
+
+  function describe(diff: FileDiff, [s, e]: Core): string {
+    const lines = diff.lines.slice(s, e + 1).filter((l) => l.kind !== " ");
+    const range = (numbers: number[]): string =>
+      numbers.length
+        ? numbers[0] === numbers.at(-1)
+          ? `${numbers[0]}`
+          : `${numbers[0]}-${numbers.at(-1)}`
+        : "";
+    const added = range(lines.flatMap((l) => (l.kind === "+" ? [l.new!] : [])));
+    const removed = range(
+      lines.flatMap((l) => (l.kind === "-" ? [l.old!] : [])),
+    );
+    return [added, removed && `old:${removed}`].filter(Boolean).join(", ");
+  }
+  async function deleteSessions(): Promise<void> {
+    const names = await sessionNames();
+    if (!names.length) {
+      void vscode.window.showInformationMessage(
+        "There are no suggest sessions.",
+      );
+      return;
+    }
+    const picked = await vscode.window.showQuickPick(
+      await Promise.all(
+        names.map(async (name) => {
+          const document = await storedDocument(name);
+          return {
+            label: name,
+            description: document
+              ? vscode.workspace.asRelativePath(document)
+              : "Dictation",
+          };
+        }),
+      ),
+      { canPickMany: true, placeHolder: "Choose the sessions to delete" },
+    );
+    for (const { label } of picked ?? []) {
+      const entry =
+        entries.get(label) ??
+        (await loading.get(label)?.catch(() => undefined));
+      if (entry) {
+        entry.closed = true;
+        entry.panel?.dispose();
+        entry.session.close();
+        entry.watchers.dispose();
+        entries.delete(label);
+      }
+      // Only session state goes: suggestions and the scratch file, never the opened document.
+      await fs.rm(path.join(storage, label), { recursive: true, force: true });
+    }
+  }
   async function openCommand(uri?: unknown): Promise<void> {
     let file: string | undefined;
     if (uri instanceof vscode.Uri) file = uri.fsPath;
@@ -400,8 +860,163 @@ export function registerSuggestHost(
         if (picked.name) return show(await load(picked.name));
       }
     }
-    show(await open(file));
+    await show(await open(file));
   }
+  function run(task: () => Promise<void>): Promise<void> {
+    return task().catch((error: unknown) => {
+      void vscode.window.showErrorMessage(
+        `Suggest view: ${(error as Error).message}`,
+      );
+    });
+  }
+  function result(value: unknown): vscode.LanguageModelToolResult {
+    return new vscode.LanguageModelToolResult([
+      new vscode.LanguageModelTextPart(JSON.stringify(value)),
+    ]);
+  }
+
+  // Inputs are untrusted JSON; each handler checks the fields it uses.
+  function contentOption(value: unknown, fallback: boolean): boolean {
+    if (value === undefined) return fallback;
+    if (typeof value !== "boolean")
+      throw new Error("includeContent must be a boolean.");
+    return value;
+  }
+
+  const tools: [
+    string,
+    string,
+    (input: never, token: vscode.CancellationToken) => Promise<unknown>,
+  ][] = [
+    [
+      "listSessions",
+      "Listing suggestion sessions",
+      async () =>
+        Promise.all(
+          (await sessionNames()).map(async (name) => ({
+            session: name,
+            document:
+              (await storedDocument(name)) ??
+              path.join(storage, name, "document.md"),
+            open: !!entries.get(name)?.panel,
+          })),
+        ),
+    ],
+    [
+      "openSession",
+      "Opening a suggestion session",
+      async (input: { path?: unknown } | undefined) => {
+        if (input?.path !== undefined && typeof input.path !== "string")
+          throw new Error("path must be a string.");
+        const entry = await open(input?.path);
+        await show(entry);
+        return {
+          session: entry.session.name,
+          document: entry.session.documentPath,
+        };
+      },
+    ],
+    [
+      "waitForFeedback",
+      "Waiting for the reader",
+      async (
+        input: SessionInput & {
+          timeoutSeconds?: number;
+          includeContent?: unknown;
+        },
+        token,
+      ) => {
+        const includeContent = contentOption(input.includeContent, false);
+        const entry = await named(input);
+        const seconds =
+          typeof input.timeoutSeconds === "number"
+            ? Math.min(600, Math.max(1, input.timeoutSeconds))
+            : 60;
+        const key = ++waits;
+        const listener = token.onCancellationRequested(() =>
+          entry.session.cancel(key),
+        );
+        try {
+          const events = await entry.session.wait(key, seconds * 1000);
+          return {
+            session: entry.session.name,
+            document: entry.session.documentPath,
+            events,
+            suggestions: await entry.session.list({ includeContent }),
+          };
+        } finally {
+          listener.dispose();
+        }
+      },
+    ],
+    [
+      "addSuggestions",
+      "Adding suggestions",
+      async (input: SessionInput & { suggestions?: unknown }) => {
+        if (!Array.isArray(input.suggestions))
+          throw new Error("suggestions must be an array.");
+        return (await named(input)).session.add(input.suggestions);
+      },
+    ],
+    [
+      "removeSuggestions",
+      "Removing suggestions",
+      async (input: SessionInput & { ids?: unknown }) => {
+        const ids = input.ids;
+        if (!Array.isArray(ids) || !ids.every((id) => typeof id === "string"))
+          throw new Error("ids must be an array of strings.");
+        return (await named(input)).session.remove(ids);
+      },
+    ],
+    [
+      "listSuggestions",
+      "Listing suggestions",
+      async (
+        input: SessionInput & { ids?: unknown; includeContent?: unknown },
+      ) => {
+        const includeContent = contentOption(input.includeContent, true);
+        const ids = input.ids;
+        if (
+          ids !== undefined &&
+          (!Array.isArray(ids) ||
+            !ids.every((id) => typeof id === "string" && id.length > 0))
+        )
+          throw new Error("ids must be an array of nonempty strings.");
+        return (await named(input)).session.list({ ids, includeContent });
+      },
+    ],
+    [
+      "addComment",
+      "Adding a session comment",
+      async (input: SessionInput & { markdown?: unknown }) => {
+        if (typeof input.markdown !== "string")
+          throw new Error("markdown must be a string.");
+        return (await named(input)).session.addComment(input.markdown);
+      },
+    ],
+    [
+      "readComment",
+      "Reading the latest session comment",
+      async (input: SessionInput) => ({
+        comment: await (await named(input)).session.readComment(),
+      }),
+    ],
+    [
+      "captureCodeChanges",
+      "Capturing code changes",
+      async (input: CaptureInput) => capture(await named(input), input),
+    ],
+  ];
+  for (const [name, message, invoke] of tools)
+    context.subscriptions.push(
+      vscode.lm.registerTool(`guidedReview_${name}`, {
+        prepareInvocation: () => ({ invocationMessage: message }),
+        async invoke(options, token) {
+          return result(await invoke(options.input as never, token));
+        },
+      }),
+    );
+
   function rehighlight(): void {
     syntax.invalidate();
     for (const entry of entries.values()) entry.session.refresh();
@@ -422,7 +1037,7 @@ export function registerSuggestHost(
           panel.dispose();
           return;
         }
-        show(await load(name), panel);
+        await show(await load(name), panel);
       },
     }),
     vscode.window.onDidChangeActiveColorTheme(rehighlight),
@@ -448,4 +1063,34 @@ export function registerSuggestHost(
       },
     },
   );
+}
+function webviewHtml(
+  template: string,
+  vscode: typeof import("vscode"),
+  webview: vscode.Webview,
+  extensionUri: vscode.Uri,
+): string {
+  function asset(...parts: string[]): string {
+    return webview
+      .asWebviewUri(vscode.Uri.joinPath(extensionUri, ...parts))
+      .toString();
+  }
+  const values: Record<string, string> = {
+    nonce: crypto.randomBytes(20).toString("hex"),
+    cspSource: webview.cspSource,
+    styleUri: asset("media", "suggest.css"),
+    clientUri: asset("out", "media", "suggest.mjs"),
+    mermaidUri: asset("node_modules", "mermaid", "dist", "mermaid.esm.min.mjs"),
+  };
+  const used = new Set<string>();
+  const html = template.replace(/\{\{([^{}]+)\}\}/g, (_match, key: string) => {
+    if (!Object.hasOwn(values, key))
+      throw new Error(`Unknown webview template placeholder: ${key}`);
+    used.add(key);
+    return escape(values[key]);
+  });
+  for (const key of Object.keys(values))
+    if (!used.has(key))
+      throw new Error(`Missing webview template placeholder: ${key}`);
+  return html;
 }
