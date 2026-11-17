@@ -11,7 +11,86 @@ const {
   checkArchiveEntries,
   licenseInventory,
   verificationEnv,
+  checkReleaseVersion,
+  checkDependencyAudit,
 } = require("../scripts/verify-release.cjs");
+
+test("release audit applies only configured, unexpired advisory exceptions", () => {
+  const exceptions = [
+    { advisory: "GHSA-fc5q-39xc-vjpf", expires: "2026-12-01T00:00:00Z" },
+  ];
+  const report = {
+    auditReportVersion: 2,
+    metadata: { vulnerabilities: { total: 2 } },
+    vulnerabilities: {
+      picomatch: {
+        via: [{ url: "https://github.com/advisories/GHSA-fc5q-39xc-vjpf" }],
+      },
+      tinyglobby: { via: ["picomatch"] },
+    },
+  };
+  const before = new Date("2026-11-17T00:00:00Z");
+  assert.equal(checkDependencyAudit(report, exceptions, before).length, 1);
+  assert.throws(
+    () =>
+      checkDependencyAudit(
+        report,
+        exceptions,
+        new Date("2026-12-01T00:00:00Z"),
+      ),
+    /expired/,
+  );
+  report.vulnerabilities.picomatch.via.push({
+    url: "https://github.com/advisories/GHSA-another-advisory",
+  });
+  assert.throws(
+    () => checkDependencyAudit(report, exceptions, before),
+    /Unexcepted/,
+  );
+  exceptions.push({
+    advisory: "GHSA-another-advisory",
+    expires: exceptions[0].expires,
+  });
+  assert.equal(checkDependencyAudit(report, exceptions, before).length, 2);
+  report.vulnerabilities = {};
+  report.metadata.vulnerabilities.total = 0;
+  assert.deepEqual(
+    checkDependencyAudit(report, exceptions, new Date("2026-12-02")),
+    [],
+  );
+  assert.throws(
+    () =>
+      checkDependencyAudit(
+        { error: { code: "ENOTFOUND" } },
+        exceptions,
+        before,
+      ),
+    /Invalid or failed/,
+  );
+});
+
+test("release tags match the manifest and both lockfile identities before packaging", () => {
+  const pkg = { name: "guided-review", version: "0.7.0" };
+  const lock = { ...pkg, packages: { "": { ...pkg } } };
+  checkReleaseVersion(pkg, lock, "v0.7.0");
+  assert.throws(
+    () => checkReleaseVersion(pkg, lock, "v0.6.0"),
+    /Release tag must be v0.7.0/,
+  );
+  assert.throws(
+    () => checkReleaseVersion(pkg, { ...lock, version: "0.6.0" }, "v0.7.0"),
+    /Manifest and lockfile/,
+  );
+  assert.throws(
+    () =>
+      checkReleaseVersion(
+        pkg,
+        { ...lock, packages: { "": { ...pkg, name: "old-name" } } },
+        "v0.7.0",
+      ),
+    /Manifest and lockfile/,
+  );
+});
 
 test("clean candidate copies public saved files without Git history, private assets or source index changes", async (t) => {
   const temporary = await fs.mkdtemp(

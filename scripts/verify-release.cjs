@@ -7,7 +7,7 @@ const path = require("node:path");
 const os = require("node:os");
 const { createHash } = require("node:crypto");
 const { spawn, execFile } = require("node:child_process");
-const { promisify } = require("node:util");
+const { parseArgs, promisify } = require("node:util");
 const execute = promisify(execFile);
 const root = path.resolve(__dirname, "..");
 const privatePath =
@@ -216,6 +216,84 @@ async function licenseInventory(candidate, entries) {
   return { licenses, textOnly, missingTexts };
 }
 
+function checkReleaseVersion(pkg, lock, tag) {
+  if (
+    pkg.name !== lock.name ||
+    pkg.name !== lock.packages[""].name ||
+    pkg.version !== lock.version ||
+    pkg.version !== lock.packages[""].version
+  ) {
+    throw new Error("Manifest and lockfile package names/versions must match.");
+  }
+  if (tag !== undefined && tag !== `v${pkg.version}`)
+    throw new Error(`Release tag must be v${pkg.version}; received ${tag}.`);
+}
+
+function checkDependencyAudit(report, exceptions, now = new Date()) {
+  if (
+    !report ||
+    report.error ||
+    report.auditReportVersion !== 2 ||
+    !report.vulnerabilities ||
+    typeof report.vulnerabilities !== "object" ||
+    Array.isArray(report.vulnerabilities)
+  ) {
+    throw new Error("Invalid or failed npm audit report.");
+  }
+  const findings = Object.values(report.vulnerabilities);
+  if (report.metadata?.vulnerabilities?.total !== findings.length)
+    throw new Error("Incomplete npm audit report.");
+  if (!findings.length) return [];
+  const advisories = findings
+    .flatMap((finding) => finding.via)
+    .filter((cause) => typeof cause !== "string");
+  const accepted = advisories.map((cause) =>
+    exceptions.find(
+      (exception) =>
+        cause?.url === `https://github.com/advisories/${exception.advisory}` &&
+        now < new Date(exception.expires),
+    ),
+  );
+  if (!accepted.length || accepted.some((exception) => !exception))
+    throw new Error(
+      "Unexcepted or expired npm audit finding; see the audit report.",
+    );
+  return [...new Set(accepted)];
+}
+
+async function auditDependencies(npm, candidate) {
+  console.log("\nVERIFY: npm audit --json");
+  let stdout;
+  let exitCode = 0;
+  try {
+    ({ stdout } = await execute(process.execPath, [npm, "audit", "--json"], {
+      cwd: candidate,
+      env: verificationEnv(),
+      maxBuffer: 8 * 1024 * 1024,
+    }));
+  } catch (error) {
+    if (error.code !== 1 || typeof error.stdout !== "string") throw error;
+    stdout = error.stdout;
+    exitCode = 1;
+    if (error.stderr) console.error(error.stderr);
+  }
+  console.log(stdout.trim());
+  const exceptions = JSON.parse(
+    await fs.readFile(
+      path.join(candidate, "scripts", "audit-exceptions.json"),
+      "utf8",
+    ),
+  );
+  const excepted = checkDependencyAudit(JSON.parse(stdout), exceptions);
+  if (exitCode && !excepted.length)
+    throw new Error("npm audit failed without reporting vulnerabilities.");
+  for (const exception of excepted) {
+    console.warn(
+      `WARNING: ${exception.advisory} temporarily accepted until ${exception.expires}: ${exception.reason} Production audit remains mandatory.`,
+    );
+  }
+}
+
 function run(command, args, cwd, discardOutput = false) {
   console.log(`\nVERIFY: ${command} ${args.join(" ")}`);
   return new Promise((resolve, reject) => {
@@ -234,6 +312,9 @@ function run(command, args, cwd, discardOutput = false) {
 }
 
 async function main() {
+  const { values } = parseArgs({
+    options: { output: { type: "string" }, tag: { type: "string" } },
+  });
   const npm = process.env.npm_execpath;
   if (!npm) throw new Error("Run this gate with npm run verify:release.");
   const temporary = await fs.mkdtemp(
@@ -242,6 +323,13 @@ async function main() {
   const candidate = path.join(temporary, "candidate");
   try {
     const digests = await copyCandidate(root, candidate);
+    const pkg = JSON.parse(
+      await fs.readFile(path.join(candidate, "package.json"), "utf8"),
+    );
+    const lock = JSON.parse(
+      await fs.readFile(path.join(candidate, "package-lock.json"), "utf8"),
+    );
+    checkReleaseVersion(pkg, lock, values.tag);
     console.log(
       `VERIFY: ${Object.keys(digests).length} saved public source files; ${process.version} on ${process.platform}`,
     );
@@ -249,15 +337,12 @@ async function main() {
     function runNpm(...args) {
       return run(process.execPath, [npm, ...args], candidate);
     }
-    await runNpm("audit");
+    await auditDependencies(npm, candidate);
     await runNpm("audit", "--omit=dev");
     await runNpm("ci", "--ignore-scripts");
     await runNpm("run", "check");
     await runNpm("test");
     await runNpm("run", "package");
-    const pkg = JSON.parse(
-      await fs.readFile(path.join(candidate, "package.json"), "utf8"),
-    );
     const archive = path.join(
       candidate,
       "dist",
@@ -285,9 +370,6 @@ async function main() {
       { maxBuffer: 8 * 1024 * 1024 },
     );
     const entries = stdout.trim().split(/\r?\n/);
-    const lock = JSON.parse(
-      await fs.readFile(path.join(candidate, "package-lock.json"), "utf8"),
-    );
     checkArchiveEntries(entries, lock);
     await licenseInventory(candidate, entries);
     console.log(
@@ -298,6 +380,13 @@ async function main() {
       throw new Error(
         "Public source paths, modes or contents changed during release verification.",
       );
+    if (values.output !== undefined) {
+      const directory = path.resolve(values.output);
+      await fs.mkdir(directory, { recursive: true });
+      const exported = path.join(directory, path.basename(archive));
+      await fs.copyFile(archive, exported, constants.COPYFILE_EXCL);
+      console.log(`VERIFY: exported checked archive to ${exported}`);
+    }
     console.log(
       `\nVERIFY: ${pkg.name} ${pkg.version} passed the clean ${process.platform} release gate. This result covers only this host.`,
     );
@@ -316,4 +405,6 @@ module.exports = {
   checkArchiveEntries,
   licenseInventory,
   verificationEnv,
+  checkReleaseVersion,
+  checkDependencyAudit,
 };

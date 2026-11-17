@@ -1,0 +1,7 @@
+[
+  {
+    "advisory": "GHSA-fc5q-39xc-vjpf",
+    "expires": "2026-12-01T00:00:00Z",
+    "reason": "vsce passes fixed patterns to picomatch; the vulnerable extglob input is not reachable on the reviewed packaging path."
+  }
+]

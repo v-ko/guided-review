@@ -1,0 +1,97 @@
+name: Verify and draft release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    outputs:
+      source-sha: ${{ steps.source.outputs.sha }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Set up Node 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Record checked-out commit
+        id: source
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Verify and export the archive
+        shell: bash
+        run: |
+          args=(--output "$RUNNER_TEMP/release")
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            args+=(--tag "$GITHUB_REF_NAME")
+          fi
+          npm run verify:release -- "${args[@]}"
+          cd "$RUNNER_TEMP/release"
+          sha256sum ./*.vsix > SHA256SUMS
+      - name: Smoke-test the same archive on minimum and current VS Code
+        shell: bash
+        run: |
+          archives=("$RUNNER_TEMP"/release/*.vsix)
+          for version in 1.110.0 latest; do
+            editor="$RUNNER_TEMP/vscode-$version"
+            mkdir "$editor"
+            curl --fail --location --retry 3 \
+              "https://update.code.visualstudio.com/$version/linux-x64/stable" \
+              --output "$editor/editor.tar.gz"
+            tar -xzf "$editor/editor.tar.gz" -C "$editor"
+            VSCODE_EXECUTABLE="$editor/VSCode-linux-x64/code" \
+            VSCODE_CLI="$editor/VSCode-linux-x64/bin/code" \
+              xvfb-run -a node scripts/smoke.cjs \
+                --vsix "${archives[0]}"
+          done
+          cd "$RUNNER_TEMP/release"
+          sha256sum --check SHA256SUMS
+      - name: Upload verified archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: verified-vsix
+          path: ${{ runner.temp }}/release/
+          if-no-files-found: error
+          retention-days: 7
+
+  draft-release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: verify
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified archive
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: verified-vsix
+          path: ${{ runner.temp }}/release
+      - name: Create a draft from the verified artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          SOURCE_SHA: ${{ needs.verify.outputs.source-sha }}
+        shell: bash
+        run: |
+          cd "$RUNNER_TEMP/release"
+          sha256sum --check SHA256SUMS
+          test "$(gh api "repos/$GH_REPO/commits/$RELEASE_TAG" --jq .sha)" = "$SOURCE_SHA"
+          gh release create "$RELEASE_TAG" ./*.vsix SHA256SUMS \
+            --verify-tag --draft --generate-notes \
+            --title "Guided Review $RELEASE_TAG"

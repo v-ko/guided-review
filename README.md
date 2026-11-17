@@ -9,7 +9,7 @@ git clone https://github.com/v-ko/guided-review.git
 cd guided-review
 npm ci
 npm run package
-code --install-extension dist/guided-code-review-0.6.0.vsix --force
+code --install-extension dist/guided-review-0.X.0.vsix --force
 ```
 
 ## Usage

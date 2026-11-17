@@ -6,7 +6,7 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const os = require("node:os");
 const net = require("node:net");
-const { promisify } = require("node:util");
+const { parseArgs, promisify } = require("node:util");
 const { spawn } = require("node:child_process");
 const execFile = promisify(require("node:child_process").execFile);
 const project = path.resolve(__dirname, "..");
@@ -85,6 +85,9 @@ function desktop(executable, args, options, timeout = 90000) {
 }
 
 async function main() {
+  const { values } = parseArgs({
+    options: { vsix: { type: "string" } },
+  });
   const temporary = await fs.mkdtemp(
     path.join(os.tmpdir(), "guided-code-review-smoke-"),
   );
@@ -215,7 +218,9 @@ async function main() {
       "--shared-data-dir",
       path.join(temporary, "shared"),
       "--install-extension",
-      path.join(project, "dist", `${pkg.name}-${pkg.version}.vsix`),
+      values.vsix !== undefined
+        ? path.resolve(values.vsix)
+        : path.join(project, "dist", `${pkg.name}-${pkg.version}.vsix`),
       "--force",
     ];
     // The documented Windows CLI is a .cmd wrapper. Quote every fixed argument
