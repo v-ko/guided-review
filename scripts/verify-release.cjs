@@ -112,6 +112,7 @@ async function copyCandidate(source, destination) {
   }
   return digests;
 }
+
 function checkArchiveEntries(entries, lock = { packages: {} }) {
   if (entries.length > 50000 || new Set(entries).size !== entries.length)
     throw new Error("VSIX has too many or duplicate entries.");

@@ -131,6 +131,7 @@ test("clean candidate copies public saved files without Git history, private ass
     else process.env.Git_Common_Dir = mixed;
   }
 });
+
 test("actual VSIX inventory requires runtime assets and rejects private, source and development entries", () => {
   const files = [
     "[Content_Types].xml",
