@@ -134,6 +134,7 @@ export async function readTheme(
     settings: [...parent.settings, ...settings],
   };
 }
+
 function wildcard(pattern: string, value: string): boolean {
   const expression = pattern
     .split("*")
@@ -238,6 +239,7 @@ export function tokenHtml(
   }
   return html;
 }
+
 function extensionContributions(
   extension: vscode.Extension<unknown>,
 ): ExtensionContributions {
@@ -365,6 +367,7 @@ export class SyntaxHighlighter {
       /* Unavailable or malformed themes leave escaped, uncolored source readable. */
     }
   }
+
   language(file: string): string | undefined {
     const associations = this.vscode.workspace
       .getConfiguration("files")

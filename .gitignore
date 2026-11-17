@@ -1,0 +1,13 @@
+node_modules/
+dist/
+out/
+*.vsix
+*.review.snapshot.json
+*.review.snapshot.json.tmp-*
+.aws/
+.codex/
+.agents/
+.reviews/
+local-media/
+examples/*.review.md
+gcr-work-log.md

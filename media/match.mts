@@ -107,6 +107,7 @@ export function matchText(source: string, target: string): Match[] {
       return matches;
     });
 }
+
 export interface Diff {
   /** Character ranges only in the source, and only in the target. */
   removed: [number, number][];

@@ -1,3 +1,40 @@
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { createHash } from "node:crypto";
+import { filePath, git, readWorking, type FileMode } from "./git.js";
+import { hash } from "./util.js";
+import {
+  checkFilters,
+  readIndex,
+  sourceLines,
+  writeIndexEntry,
+} from "./stage.js";
+
+/** One line of the full diff from HEAD to the working file. */
+export interface DiffLine {
+  kind: " " | "-" | "+";
+  text: string;
+  /** False on a last line without a newline. */
+  eol: boolean;
+  /** 1-based line number in HEAD, for context and removed lines. */
+  old?: number;
+  /** 1-based line number in the working file, for context and added lines. */
+  new?: number;
+}
+
+/** A run of diff lines: the core the reader approves, with context that makes the run unique. */
+export interface Span {
+  before: number;
+  lines: number;
+  after: number;
+  hash: string;
+}
+
+/** Inclusive diff line indices of a span core. */
+export type Core = [number, number];
+
+/** The live diff of one file: HEAD (empty on an unborn branch) against the working file. */
 export class FileDiff {
   private readonly values: [Uint32Array, Uint32Array];
   private readonly windows = new Map<number, Map<string, number[]>>();
@@ -34,6 +71,7 @@ export class FileDiff {
       return h.toString(16).padStart(8, "0");
     }).join("");
   }
+
   /** Start indices of every run with this fingerprint, found in one rolling pass per length. */
   find(length: number, fingerprint: string): number[] {
     let table = this.windows.get(length);
@@ -70,6 +108,7 @@ export class FileDiff {
     }
     return table.get(fingerprint) ?? [];
   }
+
   /** Builds a span for the core, growing the context until the run is unique. */
   span(core: Core): Span | undefined {
     const [s, e] = core;
@@ -100,6 +139,19 @@ export class FileDiff {
     ];
     return { start: found[0], core };
   }
+}
+
+const BASES = [0x01000193, 0x5bd1e995];
+
+function textLines(text: string): { text: string; eol: boolean }[] {
+  return sourceLines(text).map((line) =>
+    line.endsWith("\n")
+      ? { text: line.slice(0, -1), eol: true }
+      : { text: line, eol: false },
+  );
+}
+
+/** Line diff of two texts with the whole file as context. */
 export async function diffTexts(
   before: string,
   after: string,
@@ -165,6 +217,12 @@ export async function diffTexts(
     await fs.rm(temp, { recursive: true, force: true });
   }
 }
+
+/**
+ * Lists each removed line of a change before the added lines that replace it: the removed lines
+ * take the added lines in order, one each, and the last removed line takes the rest. Spans,
+ * blocks and staging all use this order, so a block stages the lines in the order it shows them.
+ */
 function interleave(lines: DiffLine[]): DiffLine[] {
   const result: DiffLine[] = [];
   for (let i = 0; i < lines.length;) {
@@ -186,6 +244,16 @@ function interleave(lines: DiffLine[]): DiffLine[] {
   }
   return result;
 }
+
+/** The repository root containing an absolute path. */
+export async function repositoryOf(target: string): Promise<string> {
+  const stat = await fs.stat(target).catch(() => undefined);
+  const directory = stat?.isDirectory() ? target : path.dirname(target);
+  return fs.realpath(
+    (await git(directory, ["rev-parse", "--show-toplevel"])).trim(),
+  );
+}
+
 export async function liveDiff(root: string, file: string): Promise<FileDiff> {
   filePath(file);
   const head =
@@ -223,6 +291,78 @@ export async function liveDiff(root: string, file: string): Promise<FileDiff> {
     await diffTexts(base ?? "", working.text ?? ""),
   );
 }
+
+const isChange = (line: DiffLine): boolean => line.kind !== " ";
+
+/**
+ * Parses ranges such as "41-42", "41" (working file lines) and "old:40" (HEAD lines) into span cores.
+ * Removed lines right next to a core join it, unless the call names old lines itself.
+ */
+export function rangeCores(
+  diff: FileDiff,
+  ranges: string[],
+): { cores: Core[]; problems: string[] } {
+  const cores: Core[] = [];
+  const problems: string[] = [];
+  const explicitOld = ranges.some((range) => range.startsWith("old:"));
+  for (const range of ranges) {
+    const match = /^(old:)?(\d+)(?:-(\d+))?$/.exec(range.trim());
+    if (!match) {
+      problems.push(`Malformed range: ${range}`);
+      continue;
+    }
+    const first = Number(match[2]);
+    const last = Number(match[3] ?? match[2]);
+    const selected = diff.lines.flatMap((line, index) => {
+      const number = match[1] ? line.old : line.new;
+      return number !== undefined && number >= first && number <= last
+        ? [index]
+        : [];
+    });
+    if (!selected.length) {
+      problems.push(`Range ${range} selects no lines.`);
+      continue;
+    }
+    let s = selected[0];
+    let e = selected.at(-1)!;
+    if (!explicitOld) {
+      // Removed lines before a core are the lines it replaces. Removed lines after it join only
+      // when no added line follows them, since then they replace nothing else.
+      while (s > 0 && diff.lines[s - 1].kind === "-") s--;
+      let next = e + 1;
+      while (next < diff.lines.length && diff.lines[next].kind === "-") next++;
+      if (next === diff.lines.length || diff.lines[next].kind === " ")
+        e = next - 1;
+    }
+    if (!diff.lines.slice(s, e + 1).some(isChange)) {
+      problems.push(`Range ${range} has no changes.`);
+      continue;
+    }
+    cores.push([s, e]);
+  }
+  return { cores, problems };
+}
+
+/** Runs of changed lines outside the given cores. */
+export function uncoveredCores(diff: FileDiff, covered: Core[]): Core[] {
+  const inside = (index: number): boolean =>
+    covered.some(([s, e]) => s <= index && index <= e);
+  const runs: Core[] = [];
+  diff.lines.forEach((line, index) => {
+    if (!isChange(line) || inside(index)) return;
+    const last = runs.at(-1);
+    if (last && last[1] === index - 1) last[1] = index;
+    else runs.push([index, index]);
+  });
+  return runs;
+}
+
+export function overlaps(a: Core, b: Core, diff: FileDiff): boolean {
+  for (let i = Math.max(a[0], b[0]); i <= Math.min(a[1], b[1]); i++)
+    if (isChange(diff.lines[i])) return true;
+  return false;
+}
+
 /** Changed lines of the cores and the context they show in, grouped into contiguous hunks. */
 export function blockLines(
   diff: FileDiff,
@@ -251,6 +391,67 @@ export function blockLines(
   }
   return groups;
 }
+
+export interface InspectionLine extends DiffLine {
+  /** Characters omitted from the end of a long source line. */
+  omittedCharacters?: number;
+}
+
+export interface CaptureInspection {
+  /** Core endpoints and up to three neighboring diff lines, which are not part of the core. */
+  boundaries: {
+    first: InspectionLine;
+    last: InspectionLine;
+    preceding: InspectionLine[];
+    following: InspectionLine[];
+  }[];
+  /** The same hunks the block renderer uses, abbreviated in the middle when needed. */
+  preview: {
+    head: InspectionLine[];
+    omittedLines: number;
+    tail: InspectionLine[];
+  }[];
+}
+
+/** Shows what a capture actually selected without changing its spans or staging scope. */
+export function captureInspection(
+  diff: FileDiff,
+  spans: Span[],
+  cores: Core[],
+): CaptureInspection {
+  const line = (source: DiffLine): InspectionLine => ({
+    ...source,
+    text: source.text.slice(0, 500),
+    ...(source.text.length > 500 && {
+      omittedCharacters: source.text.length - 500,
+    }),
+  });
+  const groups = blockLines(
+    diff,
+    spans.map((span, index) => ({
+      start: cores[index][0] - span.before,
+      length: span.before + span.lines + span.after,
+    })),
+    cores,
+  );
+  return {
+    boundaries: cores.map(([start, end]) => ({
+      first: line(diff.lines[start]),
+      last: line(diff.lines[end]),
+      preceding: diff.lines.slice(Math.max(0, start - 3), start).map(line),
+      following: diff.lines.slice(end + 1, end + 4).map(line),
+    })),
+    preview: groups.map((group) => ({
+      head: group.slice(0, 8).map(line),
+      omittedLines: Math.max(0, group.length - 16),
+      tail:
+        group.length > 8
+          ? group.slice(Math.max(8, group.length - 8)).map(line)
+          : [],
+    })),
+  };
+}
+
 const lineText = (line: DiffLine): string => line.text + (line.eol ? "\n" : "");
 
 const inside =
@@ -297,6 +498,7 @@ async function indexLines(diff: FileDiff, text: string): Promise<IndexLine[]> {
     return { at, text: line };
   });
 }
+
 /**
  * What happens to each line of the index's own when the cores are staged. Such lines sit in the
  * gap between the found lines around them. If the gap holds a changed line of the cores and only
@@ -326,6 +528,7 @@ function ownLines(
     return gap.some((l) => l.kind === " ") ? "conflict" : "drop";
   });
 }
+
 /** Whether the index holds every changed line of the cores and nothing else in their place. */
 export async function staged(diff: FileDiff, cores: Core[]): Promise<boolean> {
   const inCore = inside(cores);
@@ -365,6 +568,7 @@ export async function staged(diff: FileDiff, cores: Core[]): Promise<boolean> {
     ) && ownLines(diff, lines, inCore).every((fate) => fate === "keep")
   );
 }
+
 /**
  * The index text with the cores' changes: their removed lines go, their added lines come in at
  * their place in the diff, and the index's own lines between them go.
@@ -407,6 +611,7 @@ function withCores(
   addBefore(diff.lines.length);
   return text;
 }
+
 /**
  * Applies the cores' changed lines to the index and keeps its other staged changes.
  * revalidate runs while the index is locked and throws if the reader's view went stale;
@@ -478,4 +683,9 @@ export async function stageCores(
     },
   );
   return result.changed;
+}
+
+/** Identifies what a block shows, so an approval stages only what the reader saw. */
+export function blockFingerprint(diff: FileDiff, groups: DiffLine[][]): string {
+  return hash(JSON.stringify([diff.root, diff.file, diff.head, groups]));
 }

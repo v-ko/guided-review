@@ -30,6 +30,7 @@ export interface RenderMessage {
     html: string;
   };
 }
+
 export interface SelectedText {
   /** Rendered text, without Markdown syntax. */
   text: string;

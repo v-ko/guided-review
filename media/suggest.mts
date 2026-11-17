@@ -188,6 +188,7 @@ const host = {
     vscode.postMessage({ type: "ready" });
   },
 };
+
 interface TextIndex {
   text: string;
   nodes: (Text | HTMLElement)[];
@@ -231,6 +232,7 @@ function textIndex(root: Element, anchors = false): TextIndex {
   }
   return index;
 }
+
 function decorate(index: TextIndex, decorations: Decoration[]): void {
   index.nodes.forEach((node, n) => {
     if (node instanceof HTMLElement) {
@@ -277,6 +279,7 @@ function decorate(index: TextIndex, decorations: Decoration[]): void {
     node.replaceWith(fragment);
   });
 }
+
 function card(
   suggestion: SuggestionView,
   fingerprint: string,
@@ -367,6 +370,7 @@ function showSite(id: string): void {
       { duration: 1500, easing: "ease-in" },
     );
 }
+
 /** Marks where an insertion lands: after its quote, or at the end of the document. */
 function insertMarker(suggestion: SuggestionView, root = documentView): void {
   const marker = document.createElement("span");
@@ -396,6 +400,7 @@ function insertMarker(suggestion: SuggestionView, root = documentView): void {
   if (node instanceof Text) node.splitText(found[1] - index.offsets[n]);
   node.after(marker);
 }
+
 function structuralSite(
   suggestion: SuggestionView,
   root: HTMLElement,
@@ -428,6 +433,7 @@ function structuralSite(
       Number(element.dataset.sourceStart) < target.endLine,
   );
 }
+
 let mermaid: Mermaid | undefined;
 let chartId = 0;
 let revision = 0;
@@ -456,6 +462,7 @@ function showDeclined(): void {
     }),
   );
 }
+
 async function diagrams(
   root: HTMLElement,
   currentRevision: number,
@@ -520,6 +527,7 @@ async function diagrams(
         "Mermaid could not load. Source:\n\n" + node.textContent;
   }
 }
+
 function scrollAnchor(root: HTMLElement): () => void {
   const top = root.getBoundingClientRect().top;
   const scroll = root.scrollTop;
@@ -558,6 +566,7 @@ function scrollAnchor(root: HTMLElement): () => void {
     }
   };
 }
+
 async function render(
   message: RenderMessage,
   currentRevision: number,
@@ -780,6 +789,7 @@ async function render(
     preparation.remove();
   }
 }
+
 async function drain(): Promise<void> {
   if (rendering) return;
   rendering = true;
@@ -806,6 +816,7 @@ function queueRender(message: RenderMessage): void {
   revision++;
   void drain();
 }
+
 // VS Code changes body classes and variables with the theme; diagrams take hex colors, so they render again.
 let themeSignature: string | undefined;
 const themeObserver = new MutationObserver(() => {
@@ -821,6 +832,7 @@ for (const node of [document.body, document.documentElement])
     attributes: true,
     attributeFilter: ["class", "style", "data-vscode-theme-id"],
   });
+
 documentView.addEventListener("click", async (event) => {
   const button = (event.target as Element).closest("button[data-action]");
   if (!(button instanceof HTMLButtonElement) || button.disabled) return;
@@ -850,6 +862,7 @@ documentView.addEventListener("click", async (event) => {
   if (error || action === "source" || action === "diff")
     button.disabled = false;
 });
+
 // Kept after focus moves to the prompt field, which takes the page selection away.
 let selected: SelectedText | undefined;
 

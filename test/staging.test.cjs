@@ -129,6 +129,7 @@ test("staging status recognizes an anchored excerpt when Git aligns its blank bo
     { commit: false },
   );
 });
+
 test("staging refuses locks, stale views, racing sources, HEAD and index, and special flags, leaving the index as it was", async () => {
   await fixture(
     { "one.txt": "base\n" },

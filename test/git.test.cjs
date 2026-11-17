@@ -101,6 +101,7 @@ test("poisoned worker redirects/config are removed before real diffing and stagi
     code: "ENOENT",
   });
 });
+
 test("working file reads reject symlinks, escaping parents and binary content", async (t) => {
   const root = await fs.realpath(
     await fs.mkdtemp(path.join(os.tmpdir(), "guided-code-review-read-")),

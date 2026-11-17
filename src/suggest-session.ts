@@ -90,6 +90,7 @@ function summarize(
     ...(includeContent && { replacement: s.replacement }),
   };
 }
+
 /** The document file, agent suggestions and reader feedback. Emits "change" and "status". */
 export class Session extends EventEmitter {
   /** For dictated text, used unless the session opened an existing file. */
@@ -196,6 +197,7 @@ export class Session extends EventEmitter {
     );
     this.emit("change");
   }
+
   private fingerprint(document: string): string {
     return createHash("sha256")
       .update(document)
@@ -294,6 +296,7 @@ export class Session extends EventEmitter {
       return { removed, unknown: ids.filter((id) => !removed.includes(id)) };
     });
   }
+
   /** Applies a suggestion the reader saw; returns an error message on refusal. */
   accept(id: string, fingerprint: string): Promise<string | undefined> {
     return this.serial(async () => {
@@ -413,6 +416,7 @@ export class Session extends EventEmitter {
       },
     ];
   }
+
   status(): StatusMessage {
     return {
       type: "status",

@@ -217,6 +217,7 @@ export function registerSuggestHost(
       lines ? document.lineAt(end).text.length : 0,
     );
   }
+
   async function navigate(
     entry: Entry,
     message: NavigateMessage,
@@ -315,6 +316,7 @@ export function registerSuggestHost(
       apply();
     });
   }
+
   async function watchTargets(blocks: Block[]): Promise<WatchTargets> {
     const gitPaths = new Set<string>();
     const files = new Set<string>();
@@ -373,6 +375,7 @@ export function registerSuggestHost(
       unsaved,
     };
   }
+
   function post(entry: Entry, message: SuggestHostMessage): void {
     void entry.panel?.webview.postMessage(message);
   }
@@ -399,6 +402,7 @@ export function registerSuggestHost(
       }
     }
   }
+
   function validName(name: unknown): name is string {
     return typeof name === "string" && /^[a-z0-9][a-z0-9_-]{0,63}$/.test(name);
   }
@@ -419,6 +423,7 @@ export function registerSuggestHost(
       return undefined;
     }
   }
+
   function load(name: string): Promise<Entry> {
     const loaded = entries.get(name);
     if (loaded) return Promise.resolve(loaded);
@@ -454,6 +459,7 @@ export function registerSuggestHost(
     }
     return task;
   }
+
   /** A loaded session the agent names; it must exist already. */
   async function named(input: unknown): Promise<Entry> {
     const name = (input as Partial<SessionInput> | undefined)?.session;
@@ -503,6 +509,7 @@ export function registerSuggestHost(
     if (error) throw new Error(error);
     return entry;
   }
+
   async function show(
     entry: Entry,
     restored?: vscode.WebviewPanel,
@@ -566,6 +573,7 @@ export function registerSuggestHost(
       if (entry.panel === panel) entry.panel = undefined;
     });
   }
+
   async function approve(
     entry: Entry,
     id: string,
@@ -637,6 +645,7 @@ export function registerSuggestHost(
       return setApproval(document, id, groups);
     });
   }
+
   async function handle(entry: Entry, raw: unknown): Promise<void> {
     const message = decodePageMessage(raw);
     if (!message) return;
@@ -686,6 +695,7 @@ export function registerSuggestHost(
     }
     post(entry, { type: "reply", call: message.call, ...(error && { error }) });
   }
+
   async function capture(entry: Entry, input: CaptureInput): Promise<object> {
     if (!Array.isArray(input.files) || !input.files.length)
       throw new Error("files must list at least one file.");
@@ -792,6 +802,7 @@ export function registerSuggestHost(
     );
     return [added, removed && `old:${removed}`].filter(Boolean).join(", ");
   }
+
   async function deleteSessions(): Promise<void> {
     const names = await sessionNames();
     if (!names.length) {
@@ -829,6 +840,7 @@ export function registerSuggestHost(
       await fs.rm(path.join(storage, label), { recursive: true, force: true });
     }
   }
+
   async function openCommand(uri?: unknown): Promise<void> {
     let file: string | undefined;
     if (uri instanceof vscode.Uri) file = uri.fsPath;
@@ -862,6 +874,7 @@ export function registerSuggestHost(
     }
     await show(await open(file));
   }
+
   function run(task: () => Promise<void>): Promise<void> {
     return task().catch((error: unknown) => {
       void vscode.window.showErrorMessage(
@@ -869,6 +882,7 @@ export function registerSuggestHost(
       );
     });
   }
+
   function result(value: unknown): vscode.LanguageModelToolResult {
     return new vscode.LanguageModelToolResult([
       new vscode.LanguageModelTextPart(JSON.stringify(value)),
@@ -1064,6 +1078,7 @@ export function registerSuggestHost(
     },
   );
 }
+
 function webviewHtml(
   template: string,
   vscode: typeof import("vscode"),

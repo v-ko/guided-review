@@ -177,6 +177,7 @@ export function checkSuggestion(value: unknown): {
     throw new Error("Validated suggestion is missing replacement.");
   return { input: { ...input, replacement: input.replacement }, problems };
 }
+
 function occurrences(text: string, quote: string, from = 0): Span[] {
   const found: Span[] = [];
   for (
@@ -346,6 +347,7 @@ function blockPlan(
     structural,
   );
 }
+
 function insertInContainer(
   document: string,
   suggestion: SuggestionInput,
@@ -487,6 +489,7 @@ function insertInContainer(
     true,
   );
 }
+
 /** Locates where the suggestion applies; insertions get an empty span. */
 export function resolve(
   document: string,

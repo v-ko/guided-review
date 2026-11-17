@@ -209,6 +209,7 @@ test("structural insertions keep table rows and list siblings in their container
     /Same-line nested list targets/,
   );
 });
+
 test("replacements, insertions and appends keep blocks apart", () => {
   // A block replacement takes the covered sentences out of their paragraph.
   const listed = accept(document, {
@@ -383,6 +384,7 @@ test("quotes must be unambiguous and the span covers the whole from quote", () =
   assert.equal(covered({ from: "Two.", to: "Two." }), "Two.");
   assert.equal(covered({ from: "Three. Four.", to: "Three." }), undefined);
 });
+
 test("the page finds every quote the host resolves, in rendered text", async () => {
   const { findQuote } = await import("../out/media/match.mjs");
   const source =

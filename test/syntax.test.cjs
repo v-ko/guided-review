@@ -67,6 +67,7 @@ test("theme includes, JSONC, TextMate styles and scoped customizations are compo
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
 test("TextMate recovers from a cold timeout and keeps approved excerpts colored and frozen", async () => {
   const root = await fs.mkdtemp(
     path.join(os.tmpdir(), "guided-code-review-grammar-"),
@@ -221,7 +222,7 @@ test("TextMate recovers from a cold timeout and keeps approved excerpts colored 
     };
     const { span, problems } = resolve(approved, insertion);
     assert.deepEqual(problems, []);
-    const extended = applySuggestion(approved, span, insertion.replacement);
+    const extended = applySuggestion(approved, span);
     assert.ok(parseBlocks(extended).blocks[0].approved);
     assert.ok(extended.indexOf("Next section.") > extended.lastIndexOf("```"));
     // A replacement crossing the two fences must take both original boundaries.
@@ -233,11 +234,7 @@ test("TextMate recovers from a cold timeout and keeps approved excerpts colored 
     const replacedSpan = resolve(approved, replacement);
     assert.deepEqual(replacedSpan.problems, []);
     assert.equal(
-      applySuggestion(
-        approved,
-        replacedSpan.span,
-        replacement.replacement,
-      ).trim(),
+      applySuggestion(approved, replacedSpan.span).trim(),
       "Reviewed summary.",
     );
     await fs.writeFile(path.join(root, "file.test"), 'return "later";');

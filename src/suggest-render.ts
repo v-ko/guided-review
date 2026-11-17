@@ -127,7 +127,9 @@ export function navigationTargets(block: Block): NavigationTarget[] {
   }
   return targets;
 }
+
 const md = new MarkdownIt({ html: false, linkify: false, breaks: false });
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -168,6 +170,7 @@ export function decodeBlock(value: unknown): BlockRef {
     }),
   };
 }
+
 export function parseBlocks(markdown: string): {
   tokens: Token[];
   blocks: Block[];
@@ -205,6 +208,8 @@ export function parseBlocks(markdown: string): {
   });
   return { tokens, blocks };
 }
+
+/** Finds each block's spans in the live diff of its file. */
 export async function resolveBlocks(
   blocks: Block[],
   context: BlockContext,
@@ -260,6 +265,7 @@ export async function resolveBlocks(
     block.fingerprint = blockFingerprint(diff, block.groups);
   }
 }
+
 /** The diff fence that marks a block approved, recording what was staged. */
 export function approvalFence(groups: DiffLine[][], indent: string): string {
   const body = groups.flatMap((group) => [
@@ -301,6 +307,7 @@ export function setApproval(
   }
   return lines.join("\n");
 }
+
 function lineHtml(
   kind: DiffLine["kind"],
   text: string,
@@ -355,6 +362,7 @@ async function highlightedHtml(
     )
     .join("");
 }
+
 async function approvedHtml(
   text: string,
   file: string,
@@ -404,6 +412,7 @@ async function approvedHtml(
   }
   return html.join("");
 }
+
 function notice(className: string, text: string): string {
   return `<p class="${className}" role="status">${escape(text)}</p>`;
 }
@@ -497,6 +506,7 @@ async function blockHtml(
     : "";
   return `${open}<header>${title}${approve}</header>${block.notes.map((note) => notice("note", note)).join("")}${await highlightedHtml(ref.file, block.diff!.base, block.diff!.working, block.groups!, context, true, titles)}</section>`;
 }
+
 /** Renders untrusted Markdown with code blocks from the live diff. */
 export async function renderMarkdown(
   markdown: string,
