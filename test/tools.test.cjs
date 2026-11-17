@@ -13,7 +13,7 @@ test("bundled skill and native tools are declared, trusted-only and documented b
   const lock = JSON.parse(
     await fs.readFile(path.join(root, "package-lock.json"), "utf8"),
   );
-  assert.equal(pkg.name, "guided-code-review");
+  assert.equal(pkg.name, "guided-review");
   assert.equal(pkg.displayName, "Guided Review");
   assert.equal(pkg.version, lock.version);
   assert.equal(pkg.engines.vscode, lock.packages[""].engines.vscode);

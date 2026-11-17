@@ -1,12 +1,12 @@
 {
-  "name": "guided-code-review",
+  "name": "guided-review",
   "displayName": "Guided Review",
   "description": "Agent suggestions on Markdown documents, with live inline diffs that stage exactly the lines you approve.",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "publisher": "misli-local",
   "license": "GPL-3.0-only",
   "engines": {
-    "vscode": "^1.134.0"
+    "vscode": "^1.110.0"
   },
   "categories": [
     "Other"
@@ -400,7 +400,7 @@
   },
   "devDependencies": {
     "@types/node": "22.20.5",
-    "@types/vscode": "1.134.0",
+    "@types/vscode": "1.110.0",
     "@vscode/vsce": "4.0.0",
     "prettier": "3.9.10",
     "typescript": "7.0.2"

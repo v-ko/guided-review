@@ -236,7 +236,7 @@ async function main() {
     );
     console.log(install.stdout.trim());
     const installed = (await fs.readdir(extensions)).find((name) =>
-      name.startsWith("misli-local.guided-code-review-"),
+      name.startsWith(`${pkg.publisher}.${pkg.name}-`),
     );
     if (!installed)
       throw new Error(

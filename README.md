@@ -13,7 +13,7 @@ code --install-extension dist/guided-code-review-0.6.0.vsix --force
 ```
 
 ## Usage
-For any markdown documemt use the action from the command palette **Guided Code Review: Open in Suggest View**.
+For any markdown documemt use the action from the command palette **Guided Review: Open in Suggestion Mode**.
 
 Or tell the bot to generate a guided review for the unstaged code. Either by connecting to the document session (preferably) or by producing it at once.
 
