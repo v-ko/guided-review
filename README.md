@@ -1,7 +1,9 @@
 # Guided Review
-Early alpha: committed for a tech preview. It's usable but ironically in a not-entirely-reviewed state.
+This extension offers a UI for working incrementally on specification documents or code review documents.
 
-This extension offers a UI for working incrementally on specification documents or code review documents. We work with Markdown (Mermaid supported) where we can add references to HEAD-to-working-tree diffs. The right side of the UI is for receiving agent suggestions for altering the specification/review doc we're working on. The changes are communicated via native VS Code language-model tools. This means you have to instruct the agent to connect to the document in Suggestion mode.
+You tell the agent to open a document (markdown) in "suggest mode" or to open a "suggestion session" and then you interact with the agent through accepting suggestions, or giving targeted feedback through the suggestion-view UI. It's similar to editing a word document colaboratively with comments, strikethroughs, etc.
+
+The markdown syntax is expanded to allow including diff sections. That way the agent can refer to changes it has made in the code and prepare entire review stories for you to stage through the suggestion view itself.
 
 ## Installation
 ### From GitHub Releases
