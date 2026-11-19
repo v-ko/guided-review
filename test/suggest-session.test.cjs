@@ -9,6 +9,29 @@ const { Session } = require("../out/src/suggest-session.js");
 const { decodePageMessage } = require("../out/src/suggest-protocol.js");
 const { renderMarkdown } = require("../out/src/suggest-render.js");
 
+test("workspace images render in documents and proposals without enabling arbitrary sources", async () => {
+  const source =
+    '![**Lost rename**](history-diagrams/lost-update.svg "Replay")\n\n' +
+    "![Remote](https://example.com/tracker.svg)\n\n<script>bad()</script>";
+  const context = {
+    documentPath: "/workspace/planning/repair.md",
+    allowed: async () => false,
+    imageUri: async (source) =>
+      source === "history-diagrams/lost-update.svg"
+        ? "https://workspace.vscode-resource.test/lost-update.svg?x=1&y=2"
+        : undefined,
+  };
+  for (const approvable of [true, false]) {
+    const { html } = await renderMarkdown(source, context, approvable);
+    assert.match(
+      html,
+      /<img src="https:\/\/workspace\.vscode-resource\.test\/lost-update\.svg\?x=1&amp;y=2" alt="Lost rename" title="Replay">/,
+    );
+    assert.match(html, /\[Image unavailable: Remote\]/);
+    assert.doesNotMatch(html, /<script>|<img[^>]+example\.com/);
+  }
+});
+
 test("structural rows survive reload and render safely; legacy source edits stay unappliable", async (t) => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "guided-review-rows-"));
   const documents = {

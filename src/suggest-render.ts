@@ -53,6 +53,7 @@ export interface Block {
 
 export interface BlockContext {
   documentPath: string;
+  imageUri?(source: string): Promise<string | undefined>;
   /** Whether the document may show this repository. */
   allowed(root: string): Promise<boolean>;
   highlight?(
@@ -550,9 +551,29 @@ export async function renderMarkdown(
       : "";
     return `<div class="anchor-block" data-anchor-source="${escape(source)}"${position}>${rendered}</div>`;
   };
-  // Documents cannot embed remote images or navigate the page.
-  renderer.rules.image = (list, index) =>
-    `<span class="image-placeholder">[Image: ${escape(list[index].content)}]</span>`;
+  const images = new Map<Token, string>();
+  const resolveImages = async (list: Token[]): Promise<void> => {
+    for (const token of list) {
+      if (token.type === "image") {
+        const uri = await context.imageUri?.(
+          String(token.attrGet("src") ?? ""),
+        );
+        if (uri) images.set(token, uri);
+      }
+      if (token.children) await resolveImages(token.children);
+    }
+  };
+  await resolveImages(tokens);
+  const image = renderer.rules.image!;
+  renderer.rules.image = (list, index, options, env, self) => {
+    const token = list[index];
+    const uri = images.get(token);
+    if (!uri)
+      return `<span class="image-placeholder" title="${escape(String(token.attrGet("src") ?? ""))}">[Image unavailable: ${escape(token.content)}]</span>`;
+    token.attrSet("src", uri);
+    return image(list, index, options, env, self);
+  };
+  // Documents cannot navigate the page.
   renderer.rules.link_open = () => '<span class="document-link">';
   renderer.rules.link_close = () => "</span>";
   return { html: renderer.render(tokens, md.options, {}), blocks };

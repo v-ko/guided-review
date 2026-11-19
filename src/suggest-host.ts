@@ -1,6 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
+import { pathToFileURL } from "node:url";
 import type * as vscode from "vscode";
 import { escape } from "./util.js";
 import { contained, filePath, git } from "./git.js";
@@ -346,12 +347,47 @@ export function registerSuggestHost(
   function documents(entry: () => Entry): Documents {
     return {
       async render(markdown, documentPath, approvable, operation) {
+        const rendering = blockContext(
+          documentPath,
+          approvable ? entry().positions : undefined,
+        );
+        rendering.imageUri = async (source) => {
+          const webview = entry().panel?.webview;
+          if (!webview || !source || source.startsWith("//")) return undefined;
+          let uri: vscode.Uri;
+          try {
+            uri = vscode.Uri.parse(
+              new URL(source, pathToFileURL(documentPath)).href,
+            );
+          } catch (error) {
+            if (error instanceof TypeError) return undefined;
+            throw error;
+          }
+          if (uri.scheme !== "file") return undefined;
+          let real: string;
+          try {
+            real = await fs.realpath(uri.fsPath);
+          } catch (error) {
+            if (
+              (error as NodeJS.ErrnoException).code === "ENOENT" ||
+              (error as NodeJS.ErrnoException).code === "ENOTDIR"
+            )
+              return undefined;
+            throw error;
+          }
+          if (!(await allowed(real))) return undefined;
+          return webview
+            .asWebviewUri(
+              vscode.Uri.file(real).with({
+                query: uri.query,
+                fragment: uri.fragment,
+              }),
+            )
+            .toString();
+        };
         const { html, blocks } = await renderMarkdown(
           markdown,
-          blockContext(
-            documentPath,
-            approvable ? entry().positions : undefined,
-          ),
+          rendering,
           approvable,
           operation,
         );
@@ -527,7 +563,12 @@ export function registerSuggestHost(
     const title = `Suggest: ${entry.session.name}`;
     const options = {
       enableScripts: true,
-      localResourceRoots: [context.extensionUri],
+      localResourceRoots: [
+        context.extensionUri,
+        ...(vscode.workspace.workspaceFolders ?? [])
+          .filter((folder) => folder.uri.scheme === "file")
+          .map((folder) => folder.uri),
+      ],
     };
     // VS Code revives restored tabs only once they show; replace this session's unrevived tab.
     const stale = restored
