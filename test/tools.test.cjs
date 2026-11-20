@@ -53,6 +53,7 @@ test("bundled skill and native tools are declared, trusted-only and documented b
   }
   const commands = pkg.contributes.commands.map((c) => c.command);
   assert.deepEqual(commands, [
+    "layoutSuggest.openExistingSession",
     "layoutSuggest.openSession",
     "layoutSuggest.deleteSession",
   ]);

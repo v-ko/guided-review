@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; script-src 'nonce-{{nonce}}' {{cspSource}}; style-src {{cspSource}} 'unsafe-inline'; img-src {{cspSource}} data:; font-src {{cspSource}}; connect-src 'none'; base-uri 'none'; form-action 'none';"
+      content="default-src 'none'; script-src 'nonce-{{nonce}}' {{cspSource}}; style-src {{cspSource}} 'unsafe-inline'; img-src {{cspSource}} data:; font-src {{cspSource}}; frame-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none';"
     />
     <link rel="stylesheet" href="{{styleUri}}" />
   </head>

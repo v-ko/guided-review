@@ -54,6 +54,8 @@ export interface Block {
 export interface BlockContext {
   documentPath: string;
   imageUri?(source: string): Promise<string | undefined>;
+  /** Loads an HTML file and the webview URL of its folder for relative assets. */
+  htmlSource?(source: string): Promise<{ content: string; base: string }>;
   /** Whether the document may show this repository. */
   allowed(root: string): Promise<boolean>;
   highlight?(
@@ -526,6 +528,43 @@ export async function renderMarkdown(
     }
   await resolveBlocks(blocks, context);
   const html = new Map<number, string>();
+  for (const [index, token] of tokens.entries()) {
+    if (token.type !== "fence" || token.info.trim() !== "review-html") continue;
+    try {
+      const value: unknown = JSON.parse(token.content);
+      if (
+        !isRecord(value) ||
+        Object.keys(value).some(
+          (key) => !["src", "title", "height"].includes(key),
+        ) ||
+        typeof value.src !== "string" ||
+        !value.src.trim() ||
+        typeof value.title !== "string" ||
+        !value.title.trim() ||
+        (value.height !== undefined &&
+          (!count(value.height, 120) || value.height > 1200))
+      )
+        throw new Error(
+          "Expected src, title, and optional height (120-1200 pixels).",
+        );
+      if (!context.htmlSource)
+        throw new Error("Interactive HTML is unavailable in this view.");
+      const { content, base } = await context.htmlSource(value.src);
+      const height = value.height ?? 460;
+      const key = hash(
+        JSON.stringify([context.documentPath, value, content, base]),
+      );
+      html.set(
+        index,
+        `<section class="review-html" data-embed-key="${key}" data-embed-html="${escape(content)}" data-embed-base="${escape(base)}" data-embed-title="${escape(value.title)}" data-embed-height="${height}"><header><strong>${escape(value.title)}</strong><div class="actions"><button type="button" data-embed-action="reload" class="secondary">Reload</button></div></header><p class="embed-status" role="status" hidden></p><div class="embed-view"></div></section>`,
+      );
+    } catch (error) {
+      html.set(
+        index,
+        `<section class="review-html">${notice("stale", `Unable to load interactive HTML: ${(error as Error).message}`)}</section>`,
+      );
+    }
+  }
   for (const block of blocks) {
     html.set(block.token, await blockHtml(block, context, approvable));
     if (block.approved) html.set(block.token + 1, "");

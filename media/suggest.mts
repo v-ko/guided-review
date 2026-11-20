@@ -1,5 +1,6 @@
 import type { Mermaid } from "mermaid";
 import { diagramTheme } from "./theme.mjs";
+import { fromEmbed, replaceKeepingFrames, startEmbeds } from "./embeds.mjs";
 import { diffText, findQuote, matchText } from "./match.mjs";
 import type {
   AgentState,
@@ -179,8 +180,13 @@ const host = {
     window.addEventListener(
       "message",
       (event: MessageEvent<SuggestHostMessage>) => {
+        // Embedded pages are not part of the extension's message channel.
+        if (fromEmbed(event.source)) return;
         const message = event.data;
-        if (message.type !== "reply") return listener(message);
+        if (!message || typeof message !== "object") return;
+        if (message.type === "render" || message.type === "status")
+          return listener(message);
+        if (message.type !== "reply") return;
         replies.get(message.call)?.(message.error);
         replies.delete(message.call);
       },
@@ -764,9 +770,11 @@ async function render(
         suggestions[index].id === chosen,
       ),
     );
-    documentView.replaceChildren(...nextDocument.childNodes);
-    suggestionsView.replaceChildren(...nextSuggestions.childNodes);
-    commentReply.replaceChildren(...nextReply.childNodes);
+    replaceKeepingFrames(documentView, nextDocument);
+    replaceKeepingFrames(suggestionsView, nextSuggestions);
+    replaceKeepingFrames(commentReply, nextReply);
+    for (const view of [documentView, suggestionsView, commentReply])
+      startEmbeds(view);
     commentPanel.hidden = !message.comment;
     const newComment =
       message.comment && viewState.commentRevision !== message.comment.revision

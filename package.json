@@ -2,7 +2,7 @@
   "name": "guided-review",
   "displayName": "Guided Review",
   "description": "Agent suggestions on Markdown documents, with live inline diffs that stage exactly the lines you approve.",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "publisher": "misli-local",
   "license": "GPL-3.0-only",
   "engines": {
@@ -343,6 +343,12 @@
       }
     ],
     "commands": [
+      {
+        "command": "layoutSuggest.openExistingSession",
+        "title": "Open Existing Session",
+        "category": "Guided Review",
+        "enablement": "isWorkspaceTrusted"
+      },
       {
         "command": "layoutSuggest.openSession",
         "title": "Open in Suggestion Mode",

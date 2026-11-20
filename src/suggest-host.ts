@@ -353,37 +353,33 @@ export function registerSuggestHost(
         );
         rendering.imageUri = async (source) => {
           const webview = entry().panel?.webview;
-          if (!webview || !source || source.startsWith("//")) return undefined;
-          let uri: vscode.Uri;
-          try {
-            uri = vscode.Uri.parse(
-              new URL(source, pathToFileURL(documentPath)).href,
+          if (!webview) return undefined;
+          const uri = await localResource(source, documentPath);
+          return uri && webview.asWebviewUri(uri).toString();
+        };
+        rendering.htmlSource = async (source) => {
+          const webview = entry().panel?.webview;
+          if (!webview)
+            throw new Error("Interactive HTML is unavailable in this view.");
+          const uri = await localResource(source, documentPath);
+          if (!uri || !/\.html?$/i.test(uri.fsPath))
+            throw new Error(
+              "Use an existing .html file inside the trusted workspace.",
             );
-          } catch (error) {
-            if (error instanceof TypeError) return undefined;
-            throw error;
-          }
-          if (uri.scheme !== "file") return undefined;
-          let real: string;
-          try {
-            real = await fs.realpath(uri.fsPath);
-          } catch (error) {
-            if (
-              (error as NodeJS.ErrnoException).code === "ENOENT" ||
-              (error as NodeJS.ErrnoException).code === "ENOTDIR"
-            )
-              return undefined;
-            throw error;
-          }
-          if (!(await allowed(real))) return undefined;
-          return webview
-            .asWebviewUri(
-              vscode.Uri.file(real).with({
-                query: uri.query,
-                fragment: uri.fragment,
-              }),
-            )
-            .toString();
+          const limit = 256 * 1024;
+          if ((await fs.stat(uri.fsPath)).size > limit)
+            throw new Error("Interactive HTML must not exceed 256 KiB.");
+          const content = await fs.readFile(uri.fsPath, "utf8");
+          if (Buffer.byteLength(content) > limit)
+            throw new Error("Interactive HTML must not exceed 256 KiB.");
+          const folder = vscode.Uri.joinPath(
+            uri.with({ query: "", fragment: "" }),
+            "..",
+          );
+          return {
+            content,
+            base: webview.asWebviewUri(folder).toString().replace(/\/?$/, "/"),
+          };
         };
         const { html, blocks } = await renderMarkdown(
           markdown,
@@ -410,6 +406,37 @@ export function registerSuggestHost(
       },
       unsaved,
     };
+  }
+
+  async function localResource(
+    source: string,
+    documentPath: string,
+  ): Promise<vscode.Uri | undefined> {
+    if (!source || source.startsWith("//")) return undefined;
+    let uri: vscode.Uri;
+    try {
+      uri = vscode.Uri.parse(new URL(source, pathToFileURL(documentPath)).href);
+    } catch (error) {
+      if (error instanceof TypeError) return undefined;
+      throw error;
+    }
+    if (uri.scheme !== "file") return undefined;
+    let real: string;
+    try {
+      real = await fs.realpath(uri.fsPath);
+    } catch (error) {
+      if (
+        (error as NodeJS.ErrnoException).code === "ENOENT" ||
+        (error as NodeJS.ErrnoException).code === "ENOTDIR"
+      )
+        return undefined;
+      throw error;
+    }
+    if (!(await allowed(real))) return undefined;
+    return vscode.Uri.file(real).with({
+      query: uri.query,
+      fragment: uri.fragment,
+    });
   }
 
   function post(entry: Entry, message: SuggestHostMessage): void {
@@ -882,6 +909,40 @@ export function registerSuggestHost(
     }
   }
 
+  async function pickSession(existingOnly = false): Promise<void> {
+    if (!vscode.workspace.isTrusted)
+      throw new Error("The suggest view requires a trusted workspace.");
+    const names = await sessionNames();
+    if (existingOnly && !names.length) {
+      void vscode.window.showInformationMessage(
+        "There are no suggest sessions.",
+      );
+      return;
+    }
+    const picked = await vscode.window.showQuickPick(
+      [
+        ...(existingOnly
+          ? []
+          : [{ label: "New suggestion session", name: undefined }]),
+        ...(await Promise.all(
+          names.map(async (name) => {
+            const document = await storedDocument(name);
+            return {
+              label: name,
+              description: document
+                ? vscode.workspace.asRelativePath(document)
+                : "Blank document",
+              name,
+            };
+          }),
+        )),
+      ],
+      { placeHolder: "Open a suggestion session" },
+    );
+    if (!picked) return;
+    await show(picked.name ? await load(picked.name) : await open());
+  }
+
   async function openCommand(uri?: unknown): Promise<void> {
     let file: string | undefined;
     if (uri instanceof vscode.Uri) file = uri.fsPath;
@@ -889,29 +950,7 @@ export function registerSuggestHost(
       const editor = vscode.window.activeTextEditor?.document;
       if (editor?.languageId === "markdown" && editor.uri.scheme === "file")
         file = editor.uri.fsPath;
-      else {
-        const names = await sessionNames();
-        const picked = await vscode.window.showQuickPick(
-          [
-            { label: "New suggestion session", name: undefined },
-            ...(await Promise.all(
-              names.map(async (name) => {
-                const document = await storedDocument(name);
-                return {
-                  label: name,
-                  description: document
-                    ? vscode.workspace.asRelativePath(document)
-                    : "Blank document",
-                  name,
-                };
-              }),
-            )),
-          ],
-          { placeHolder: "Open a suggestion session" },
-        );
-        if (!picked) return;
-        if (picked.name) return show(await load(picked.name));
-      }
+      else return pickSession();
     }
     await show(await open(file));
   }
@@ -1081,6 +1120,9 @@ export function registerSuggestHost(
     vscode.commands.registerCommand(
       "layoutSuggest.openSession",
       (uri?: unknown) => run(() => openCommand(uri)),
+    ),
+    vscode.commands.registerCommand("layoutSuggest.openExistingSession", () =>
+      run(() => pickSession(true)),
     ),
     vscode.commands.registerCommand("layoutSuggest.deleteSession", () =>
       run(deleteSessions),

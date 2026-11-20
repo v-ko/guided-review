@@ -1237,6 +1237,70 @@ async function run() {
       `reader anchor moved by ${stability.jumps}px`,
     );
 
+    // An embedded page loads relative files, cannot reach remote URLs, and its
+    // messages do not reach the panel's host channel.
+    await fs.writeFile(
+      path.join(root, "shared.mjs"),
+      "export const label = 'shared module';\n",
+    );
+    await fs.writeFile(path.join(root, "data.json"), '{"value": 42}\n');
+    await fs.writeFile(
+      path.join(root, "embed.html"),
+      `<!doctype html><html><head></head><body><p id="out">pending</p>
+<script type="module">
+import { label } from "./shared.mjs";
+const data = await (await fetch("./data.json")).json();
+const remote = await fetch("https://example.com/").then(() => "reached", () => "blocked");
+const forged = (text) => ({ type: "render", session: "forged", path: "forged.md", fingerprint: text, document: "<h1>" + text + "</h1>", suggestions: [] });
+parent.postMessage(forged("Forged"), "*");
+addEventListener("pagehide", () => parent.postMessage(forged("Forged on removal"), "*"));
+document.getElementById("out").textContent = [label, data.value, remote].join(" ");
+</script></body></html>`,
+    );
+    await fs.writeFile(
+      notes,
+      '# Embed\n\n```review-html\n{"src":"./embed.html","title":"Embed","height":120}\n```\n',
+    );
+    await waitFor(
+      () =>
+        page.client.evaluate(
+          `document.querySelector('#document .review-html iframe')?.contentDocument
+              ?.getElementById('out')?.textContent?.match(/^(?!pending)./)`,
+          page.contextId,
+        ),
+      "embedded page result",
+    );
+    const embedded = await page.client.evaluate(
+      `document.querySelector('#document .review-html iframe').contentDocument.getElementById('out').textContent`,
+      page.contextId,
+    );
+    assert.equal(embedded, "shared module 42 blocked");
+    // Reload removes the frame; its pagehide message arrives after removal.
+    await page.client.evaluate(
+      `(() => { const frame = document.querySelector('#document .review-html iframe');
+        frame.contentDocument.getElementById('out').textContent = 'pending';
+        document.querySelector('#document [data-embed-action="reload"]').click(); })()`,
+      page.contextId,
+    );
+    await waitFor(
+      () =>
+        page.client.evaluate(
+          `document.querySelector('#document .review-html iframe')?.contentDocument
+              ?.getElementById('out')?.textContent?.match(/^(?!pending)./)`,
+          page.contextId,
+        ),
+      "reloaded embedded page result",
+    );
+    // Give a forged message time to arrive before checking that it was ignored.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    assert.ok(
+      await page.client.evaluate(
+        `document.getElementById('document').textContent.includes('Embed') && !document.getElementById('document').textContent.includes('Forged')`,
+        page.contextId,
+      ),
+      "embedded page messages do not render in the panel",
+    );
+
     await fs.writeFile(
       path.join(root, "smoke-result.json"),
       JSON.stringify({ ok: true }),

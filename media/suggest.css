@@ -431,6 +431,26 @@ mark.added {
   max-width: 100%;
   height: auto;
 }
+.review-html {
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 6px;
+  padding: 12px;
+}
+.review-html header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.embed-status {
+  color: var(--vscode-descriptionForeground);
+}
+.embed-view iframe {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: var(--vscode-editor-background);
+}
 
 #prompt {
   display: flex;

@@ -62,6 +62,38 @@ For each reader request, offer suggestions or reply with a comment, not both. Wh
 
 After opening or rejoining a session, call `guidedReview_readComment` before replacing its previous explanation. It returns `{comment: {revision, markdown}}`, or `{comment: null}` when none exists. This recovers exact saved Markdown even when chat tool history is unavailable. It does not recover reader requests or delivery state.
 
+## Interactive HTML blocks
+
+Use a fenced `review-html` block for a local animation, visualization or mock
+prototype. Create the HTML file and its assets with normal file tools, then
+propose the Markdown block through suggestions:
+
+````markdown
+```review-html
+{"src":"./history-diagrams/replay.html","title":"Replay animation","height":460}
+```
+````
+
+- `src` and a descriptive `title` are required. The optional integer `height`
+  defaults to 460 pixels and must be from 120 to 1200. No other fields are accepted.
+- Paths resolve from the Markdown document's folder, including in suggestions
+  and comments. The page must be `.html` or `.htm`, inside the trusted workspace,
+  and at most 256 KiB.
+- Relative URLs in the page resolve from the page's folder. Scripts, ES modules
+  (`import "./shared.mjs"`), stylesheets, images, fonts and `fetch()` work for
+  files inside the workspace, so several pages can share code. Remote URLs,
+  local servers, nested frames, workers and forms are blocked.
+- Inline `<script>`, `<style>` and event handler attributes work. Raw HTML in
+  Markdown remains disabled.
+- Each block runs when the review renders. **Reload** restarts the page with
+  the loaded HTML. After editing the page, refresh the review (for example, save
+  the Markdown file) to load it. Changed shared files load on the next Reload.
+- Unchanged frames keep their state during review updates when the browser
+  supports atomic DOM moves. Older browsers restart them.
+- The page runs in its own iframe, so its errors and globals do not affect the
+  review. It is not a security boundary: only embed HTML the reader trusts.
+- Other Markdown viewers show the JSON as an ordinary fenced code block.
+
 ## Code blocks
 
 A `review-diff` block shows changed lines of a file live: HEAD against the working tree. The reader approves a block in the view, which stages exactly its lines and embeds them as a `diff` fence under the block. Never write that `diff` fence yourself.

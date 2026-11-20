@@ -9,6 +9,66 @@ const { Session } = require("../out/src/suggest-session.js");
 const { decodePageMessage } = require("../out/src/suggest-protocol.js");
 const { renderMarkdown } = require("../out/src/suggest-render.js");
 
+test("HTML fences load local content inertly and report invalid or unavailable embeds", async () => {
+  const source = "<button>Play</button><script>window.play = true</script>";
+  const context = {
+    documentPath: "/workspace/planning/repair.md",
+    allowed: async () => false,
+    htmlSource: async (src) => {
+      if (src !== "./animation.html") throw new Error("File not in workspace.");
+      return { content: source, base: "https://resource.test/planning/" };
+    },
+  };
+  const fence = (value) => "```review-html\n" + JSON.stringify(value) + "\n```";
+  const valid = {
+    src: "./animation.html",
+    title: 'Replay "rename"',
+    height: 360,
+  };
+  for (const approvable of [true, false]) {
+    // Both the document and a proposed block get inert markup; the webview runs it.
+    const { html } = await renderMarkdown(fence(valid), context, approvable);
+    assert.match(html, /data-embed-action="reload"/);
+    assert.match(html, /data-embed-height="360"/);
+    assert.match(html, /data-embed-title="Replay &quot;rename&quot;"/);
+    assert.match(html, /&lt;script&gt;window.play = true&lt;\/script&gt;/);
+    assert.match(html, /data-embed-base="https:\/\/resource.test\/planning\/"/);
+    assert.doesNotMatch(html, /<iframe|<script/);
+  }
+  // Invalid metadata and failed file resolution stay visible, not executable.
+  for (const value of [
+    { ...valid, height: 119 },
+    { ...valid, height: 1201 },
+    { ...valid, src: "../outside.html" },
+    { ...valid, sandbox: "allow-same-origin" },
+  ]) {
+    const { html } = await renderMarkdown(fence(value), context, true);
+    assert.match(html, /Unable to load interactive HTML/);
+    assert.doesNotMatch(html, /data-embed-html=/);
+  }
+  // File changes invalidate the identity; ordinary rerenders do not.
+  const first = await renderMarkdown(fence(valid), context, true);
+  assert.equal(
+    (await renderMarkdown(fence(valid), context, true)).html,
+    first.html,
+  );
+  const changed = await renderMarkdown(
+    fence(valid),
+    {
+      ...context,
+      htmlSource: async () => ({
+        content: source + "<p>Updated</p>",
+        base: "https://resource.test/planning/",
+      }),
+    },
+    true,
+  );
+  assert.notEqual(
+    changed.html.match(/data-embed-key="([^"]+)"/)[1],
+    first.html.match(/data-embed-key="([^"]+)"/)[1],
+  );
+});
+
 test("workspace images render in documents and proposals without enabling arbitrary sources", async () => {
   const source =
     '![**Lost rename**](history-diagrams/lost-update.svg "Replay")\n\n' +
